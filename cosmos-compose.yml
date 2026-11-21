@@ -1,0 +1,25 @@
+# Burrow for Cosmos Cloud (or any server that pulls prebuilt images).
+# The image is built by GitHub Actions from this repo: ghcr.io/raydevxyz/burrow
+#
+# In Cosmos: ServApps → import a compose file → paste this → install.
+# Then create a URL for your domain that targets http://burrow:3000
+# No ports are published: Cosmos's reverse proxy reaches the container directly.
+
+services:
+  burrow:
+    image: ghcr.io/raydevxyz/burrow:latest
+    container_name: burrow
+    restart: unless-stopped
+    volumes:
+      - burrow-data:/data
+    environment:
+      TRUST_PROXY: "true"            # Cosmos terminates HTTPS in front of Burrow
+      ALLOW_SIGNUP: "false"
+      BLOCK_PRIVATE_URLS: "false"
+      # Optional AI tagging — set AI_PROVIDER to "anthropic" and add your key:
+      AI_PROVIDER: ""
+      AI_MODEL: ""
+      ANTHROPIC_API_KEY: ""
+
+volumes:
+  burrow-data:

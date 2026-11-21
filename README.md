@@ -55,6 +55,18 @@ docker compose up -d --build
 
 Open <http://localhost:3000>. The first account you create becomes the owner. Data lives in the `burrow-data` volume (`/data`: `burrow.db`, `archives/`, `uploads/`).
 
+### On a VPS with Cosmos Cloud
+
+GitHub Actions builds a ready-made image, `ghcr.io/raydevxyz/burrow:latest`, on every push to `main`.
+
+1. **Make the image public** (once): on GitHub, go to your profile → **Packages** → `burrow` → **Package settings** → **Change visibility** → Public. Otherwise the server needs a GitHub login to pull it.
+2. **Point your domain** (e.g. `burrow.example.com`) at the VPS with a DNS **A record**.
+3. In Cosmos, open **ServApps**, choose the option to **import a compose file**, and paste [`cosmos-compose.yml`](cosmos-compose.yml).
+4. In Cosmos **URLs**, create a URL for `burrow.example.com` with target **`http://burrow:3000`**. Cosmos provides the HTTPS certificate.
+5. Open `https://burrow.example.com` and create your account. Put that URL in the extension's options.
+
+To update, push to `main`, wait for the GitHub Action to finish, then update or recreate the container in Cosmos so it pulls the new `latest` image.
+
 ### Without Docker
 
 Needs Node.js **22.13+**, which includes the built-in `node:sqlite`.
