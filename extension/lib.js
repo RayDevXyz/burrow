@@ -7,15 +7,32 @@ export async function getConfig() {
 }
 export async function isConfigured() { const c = await getConfig(); return !!(c.server && c.token); }
 
+/** Origin pattern for the server, used for Chrome's host permission. */
+export const originPattern = server => new URL(server).origin + '/*';
+export async function hasServerAccess(server) {
+  try { return await chrome.permissions.contains({ origins: [originPattern(server)] }); } catch { return false; }
+}
+
 export async function api(path, { method = 'GET', body } = {}) {
   const { server, token } = await getConfig();
   if (!server || !token) throw new Error('Not connected — open the extension options');
-  const r = await fetch(server + '/api' + path, {
-    method,
-    headers: { Authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = (r.headers.get('content-type') || '').includes('json') ? await r.json() : null;
+  let r;
+  try {
+    r = await fetch(server + '/api' + path, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      redirect: 'manual',
+    });
+  } catch (e) {
+    // Without host access Chrome applies CORS; a reverse proxy that answers the preflight itself then blocks us.
+    if (!(await hasServerAccess(server))) throw new Error('Burrow needs access to your server — open the extension options and click Save & test');
+    throw new Error(`Can't reach ${new URL(server).host} — is the server running?`);
+  }
+  const type = r.headers.get('content-type') || '';
+  if (r.type === 'opaqueredirect' || (r.status >= 300 && r.status < 400) || (r.ok && type.includes('text/html')))
+    throw new Error('Your server answered with a login page instead of Burrow. Turn off the reverse proxy\'s authentication (e.g. Cosmos "Authentication required") for this URL.');
+  const data = type.includes('json') ? await r.json() : null;
   if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);
   return data;
 }

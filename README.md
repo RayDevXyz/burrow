@@ -128,7 +128,7 @@ burrow.example.com {
 3. The options page opens. In the Burrow web app, go to **Settings → New token**, then paste the server URL and token and click **Save & test**.
 4. Pin the extension. Use the popup to save pages, and `Alt+Shift+T` (or "Tab manager" in the popup) for workspaces and stacks.
 
-The extension talks to your server with a Bearer token over CORS, so it needs no host permissions.
+When you click **Save & test**, Chrome asks to let Burrow access your server's address, and only that address. With that access the extension's requests skip CORS preflight checks. This matters behind reverse proxies like Cosmos, which can answer those checks themselves and block the extension. If the options page says your server answered with a login page, turn off the proxy's own authentication (in Cosmos: **Authentication required**) for the Burrow URL. Burrow has its own login and API tokens.
 
 ## Android app (share menu)
 
