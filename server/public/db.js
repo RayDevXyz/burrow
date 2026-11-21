@@ -3,6 +3,19 @@
  * helpers app.js exposes on window.Burrow at call time. */
 (() => {
 'use strict';
+
+// The UI builds optional parts as `cond ? element : null`. The DOM's append/prepend/
+// replaceChildren would print those as the text "null", so skip empty values app-wide.
+for (const m of ['append', 'prepend', 'replaceChildren', 'before', 'after', 'replaceWith']) {
+  for (const proto of [Element.prototype, DocumentFragment.prototype]) {
+    const orig = proto[m];
+    if (!orig || orig.__burrowSafe) continue;
+    const safe = function (...nodes) { return orig.apply(this, nodes.flat(Infinity).filter(n => n != null && n !== false && n !== '')); };
+    safe.__burrowSafe = true;
+    proto[m] = safe;
+  }
+}
+
 const B = () => window.Burrow;
 const h = (...a) => B().h(...a);
 const F = () => window.BurrowFormula;
