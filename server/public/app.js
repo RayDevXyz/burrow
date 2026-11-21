@@ -241,8 +241,8 @@ function renderList() {
   }
   const grid = h('div', { class: 'grid' + (state.layout === 'list' ? ' list' : '') + (state.selected.size ? ' selecting' : '') },
     state.items.map(card));
-  list.replaceChildren(grid, state.hasMore ? h('div', { style: { textAlign: 'center', marginTop: '20px' } },
-    h('button', { class: 'btn', onclick: async () => { await loadItems(true); renderList(); } }, 'Load more')) : null);
+  list.replaceChildren(grid, ...(state.hasMore ? [h('div', { style: { textAlign: 'center', marginTop: '20px' } },
+    h('button', { class: 'btn', onclick: async () => { await loadItems(true); renderList(); } }, 'Load more'))] : []));
   renderBulkbar();
 }
 
