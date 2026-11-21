@@ -49,7 +49,183 @@ const state = {
   collections: [], tags: [], stats: {}, q: '', sort: store.get('sort', ''),
   layout: store.get('layout', 'grid'), selected: new Set(), openId: null,
 };
-document.documentElement.dataset.theme = store.get('theme', 'auto');
+// ───────── themes ─────────
+// The global theme (Home and every other page) lives on the user; a collection can have its own.
+const GRADIENTS = {
+  aurora: 'linear-gradient(135deg, #7c5cff 0%, #2dd4bf 100%)',
+  sunset: 'linear-gradient(135deg, #f97316 0%, #db2777 55%, #7c3aed 100%)',
+  ocean: 'linear-gradient(135deg, #0ea5e9 0%, #1e3a8a 100%)',
+  forest: 'linear-gradient(135deg, #16a34a 0%, #064e3b 100%)',
+  peach: 'linear-gradient(135deg, #fed7aa 0%, #fda4af 100%)',
+  night: 'linear-gradient(135deg, #0f172a 0%, #312e81 60%, #581c87 100%)',
+  candy: 'linear-gradient(135deg, #f0abfc 0%, #93c5fd 100%)',
+  slate: 'linear-gradient(135deg, #64748b 0%, #1e293b 100%)',
+};
+const ACCENTS = ['#7c5cff', '#3b82f6', '#06b6d4', '#10b981', '#84cc16', '#f59e0b', '#f97316', '#ef4444', '#ec4899', '#64748b'];
+const DEFAULT_THEME = {
+  accent: '#7c5cff', mode: 'auto',
+  bg: { type: 'none', image: '', gradient: 'aurora', blur: 0, dim: 30, position: 'center' },
+  header: { subtitle: '', emoji: '', banner: 'none', bannerImage: '', gradient: 'aurora', height: 'medium' },
+  cards: { layout: 'grid', size: 'medium', radius: 12, glass: false },
+};
+const clone = o => JSON.parse(JSON.stringify(o));
+const withDefaults = t => {
+  const d = clone(DEFAULT_THEME); if (!t) return d;
+  return { ...d, ...t, bg: { ...d.bg, ...t.bg }, header: { ...d.header, ...t.header }, cards: { ...d.cards, ...t.cards } };
+};
+const cssUrl = u => `url("${String(u).replace(/["\\\n]/g, '')}")`;
+
+/** Theme for the page being shown: the collection's own theme, else the global one. */
+function currentTheme() {
+  const r = route();
+  if (r.kind === 'collection') {
+    const c = state.collections.find(c => c.id === r.id);
+    if (c?.theme) return withDefaults(c.theme);
+  }
+  return withDefaults(state.me?.theme || store.get('globalTheme', null));
+}
+
+function applyTheme(t) {
+  const root = document.documentElement;
+  root.dataset.theme = t.mode;
+  root.style.setProperty('--accent', t.accent);
+  root.style.setProperty('--radius', t.cards.radius + 'px');
+  root.style.setProperty('--card-min', { small: '190px', medium: '250px', large: '330px' }[t.cards.size]);
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', t.accent);
+  let layer = document.getElementById('bg-layer');
+  if (!layer) { layer = h('div', { id: 'bg-layer' }, h('div', { class: 'img' }), h('div', { class: 'dim' })); document.body.prepend(layer); }
+  const img = layer.firstChild;
+  const on = (t.bg.type === 'image' && t.bg.image) || t.bg.type === 'gradient';
+  document.body.classList.toggle('has-bg', !!on);
+  document.body.classList.toggle('glass', !!t.cards.glass);
+  img.style.backgroundImage = !on ? 'none' : t.bg.type === 'image' ? cssUrl(t.bg.image) : GRADIENTS[t.bg.gradient];
+  img.style.backgroundPosition = t.bg.position;
+  img.style.filter = t.bg.blur ? `blur(${t.bg.blur}px)` : 'none';
+  layer.lastChild.style.opacity = on ? t.bg.dim / 100 : 0;
+}
+
+function pageHeader(r, t, actions) {
+  const hd = t.header;
+  const banner = hd.banner === 'image' && hd.bannerImage ? cssUrl(hd.bannerImage) : hd.banner === 'gradient' ? GRADIENTS[hd.gradient] : null;
+  return h('header', { class: 'page-header' + (banner ? ' banner ' + hd.height : '') , style: banner ? { backgroundImage: banner } : null },
+    h('div', { class: 'ph-inner' },
+      h('div', { class: 'ph-text' },
+        h('div', { class: 'ph-title' }, h('span', { class: 'ph-emoji' }, hd.emoji || r.icon || ''), h('h2', {}, r.title)),
+        hd.subtitle ? h('p', { class: 'ph-sub' }, hd.subtitle) : null),
+      h('div', { class: 'ph-actions' }, actions)));
+}
+
+// ───────── theme editor (live preview) ─────────
+function openThemeEditor() {
+  const r = route();
+  const col = r.kind === 'collection' ? state.collections.find(c => c.id === r.id) : null;
+  const original = currentTheme();
+  const t = clone(original);
+  // A collection without its own theme starts from the global look, but keeps its own icon and no subtitle.
+  if (col && !col.theme) { t.header.emoji = ''; t.header.subtitle = ''; }
+  const close = () => { $('.drawer.theme')?.remove(); $('.backdrop.theme')?.remove(); };
+  const preview = () => { applyTheme(t); const ph = $('.page-header'); if (ph) ph.replaceWith(headerFor(r, t)); renderList(); };
+  const set = (path, v) => { const k = path.split('.'); let o = t; while (k.length > 1) o = o[k.shift()]; o[k[0]] = v; state.layout = t.cards.layout; preview(); body(); };
+
+  const seg = (path, opts) => { const cur = path.split('.').reduce((o, k) => o[k], t);
+    return h('div', { class: 'seg' }, opts.map(([v, l]) => h('button', { type: 'button', class: v === cur ? 'on' : '', onclick: () => set(path, v) }, l))); };
+  const slider = (path, min, max, unit = '') => { const cur = path.split('.').reduce((o, k) => o[k], t);
+    const out = h('span', { class: 'muted' }, cur + unit);
+    return h('div', { class: 'row' }, h('input', { type: 'range', min, max, value: cur, class: 'grow',
+      oninput: e => { out.textContent = e.target.value + unit; const k = path.split('.'); t[k[0]][k[1]] = +e.target.value; preview(); } }), out); };
+  const swatches = (path) => { const cur = path.split('.').reduce((o, k) => o[k], t);
+    return h('div', { class: 'swatches' }, Object.entries(GRADIENTS).map(([k, g]) =>
+      h('button', { type: 'button', title: k, class: k === cur ? 'on' : '', style: { backgroundImage: g }, onclick: () => set(path, k) }))); };
+  const imagePicker = (path) => {
+    const cur = path.split('.').reduce((o, k) => o[k], t);
+    const file = h('input', { type: 'file', accept: 'image/*', hidden: true, onchange: async e => {
+      const f = e.target.files[0]; if (!f) return;
+      const fd = new FormData(); fd.append('image', f);
+      try { const { url } = await api('/theme-images', { method: 'POST', body: fd }); set(path, url); } catch (x) { toast(x.message); }
+    } });
+    return h('div', { class: 'col' },
+      cur ? h('div', { class: 'thumb-preview', style: { backgroundImage: cssUrl(cur) } }) : null,
+      h('div', { class: 'row' }, file, h('button', { type: 'button', class: 'btn small', onclick: () => file.click() }, '⬆ Upload image'),
+        h('input', { class: 'input grow', placeholder: 'or paste an image URL', value: cur.startsWith('http') ? cur : '',
+          onchange: e => set(path, e.target.value.trim()) })));
+  };
+  const field = (label, ...kids) => h('div', { class: 'field' }, h('label', {}, label), kids);
+
+  const scroll = h('div', { class: 'scroll' });
+  function body() {
+    scroll.replaceChildren(...[
+      h('h4', {}, '🎨 Colors & mode'),
+      field('Accent color', h('div', { class: 'swatches accents' },
+        ACCENTS.map(a => h('button', { type: 'button', class: a === t.accent ? 'on' : '', style: { background: a }, onclick: () => set('accent', a) })),
+        h('input', { type: 'color', value: t.accent, title: 'Custom color', oninput: e => { t.accent = e.target.value; preview(); }, onchange: () => body() }))),
+      field('Mode', seg('mode', [['auto', 'Auto'], ['light', '☀ Light'], ['dark', '☾ Dark']])),
+
+      h('h4', {}, '🖼 Background'),
+      field('Type', seg('bg.type', [['none', 'None'], ['gradient', 'Gradient'], ['image', 'Image']])),
+      t.bg.type === 'gradient' ? field('Gradient', swatches('bg.gradient')) : null,
+      t.bg.type === 'image' ? field('Image', imagePicker('bg.image')) : null,
+      t.bg.type === 'image' ? field('Position', seg('bg.position', [['top', 'Top'], ['center', 'Center'], ['bottom', 'Bottom']])) : null,
+      t.bg.type !== 'none' ? field('Blur', slider('bg.blur', 0, 30, 'px')) : null,
+      t.bg.type !== 'none' ? field('Dim (keeps cards readable)', slider('bg.dim', 0, 90, '%')) : null,
+
+      h('h4', {}, '🏷 Page header'),
+      field('Emoji', h('input', { class: 'input', value: t.header.emoji, placeholder: r.icon || '🏠', maxlength: 8,
+        oninput: e => { t.header.emoji = e.target.value; preview(); } })),
+      field('Subtitle', h('input', { class: 'input', value: t.header.subtitle, placeholder: 'A short description for this page',
+        oninput: e => { t.header.subtitle = e.target.value; preview(); } })),
+      field('Banner', seg('header.banner', [['none', 'None'], ['gradient', 'Gradient'], ['image', 'Image']])),
+      t.header.banner === 'gradient' ? field('Banner gradient', swatches('header.gradient')) : null,
+      t.header.banner === 'image' ? field('Banner image', imagePicker('header.bannerImage')) : null,
+      t.header.banner !== 'none' ? field('Banner height', seg('header.height', [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']])) : null,
+
+      h('h4', {}, '🃏 Cards'),
+      field('Layout', seg('cards.layout', [['grid', '▦ Grid'], ['list', '☰ List']])),
+      field('Size', seg('cards.size', [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']])),
+      field('Corner radius', slider('cards.radius', 0, 28, 'px')),
+      h('label', { class: 'row' }, h('input', { type: 'checkbox', checked: t.cards.glass, onchange: e => set('cards.glass', e.target.checked) }),
+        ' Glass cards (see-through, great over images)'),
+    ].flat().filter(Boolean));
+  }
+  body();
+
+  const save = async () => {
+    try {
+      if (col) {
+        await api(`/collections/${col.id}`, { method: 'PATCH', body: { theme: t } });
+        col.theme = t;
+      } else {
+        const r2 = await api('/me/theme', { method: 'PUT', body: { theme: t } });
+        state.me.theme = r2.theme; store.set('globalTheme', r2.theme);
+      }
+      toast('Theme saved'); close(); renderMain();
+    } catch (x) { toast(x.message); }
+  };
+  const cancel = () => { close(); applyTheme(original); state.layout = original.cards.layout; renderMain(); };
+  const reset = async () => {
+    if (col) {
+      if (!confirm('Remove this collection’s theme and use the global theme again?')) return;
+      await api(`/collections/${col.id}`, { method: 'PATCH', body: { theme: null } }); col.theme = null;
+    } else {
+      if (!confirm('Reset the global theme to the defaults?')) return;
+      await api('/me/theme', { method: 'PUT', body: { theme: null } }); state.me.theme = null; store.set('globalTheme', null);
+    }
+    close(); renderMain(); toast('Theme reset');
+  };
+
+  document.body.append(
+    h('div', { class: 'backdrop theme', onclick: cancel, style: { background: 'transparent' } }),
+    h('div', { class: 'drawer theme' },
+      h('header', {}, h('b', { class: 'grow' }, col ? `Theme · ${col.icon} ${col.name}` : 'Global theme'),
+        h('button', { class: 'btn small ghost', onclick: cancel }, '✕')),
+      col ? null : h('p', { class: 'muted', style: { margin: '10px 16px 0' } }, 'Used on Home and every page. Collections can have their own theme.'),
+      scroll,
+      h('footer', { class: 'row' }, h('button', { class: 'btn primary', onclick: save }, 'Save'),
+        h('button', { class: 'btn', onclick: cancel }, 'Cancel'), h('span', { class: 'grow' }),
+        h('button', { class: 'btn danger', onclick: reset }, col ? 'Use global theme' : 'Reset'))));
+}
+let headerFor = (r, t) => pageHeader(r, t, []);
+
+applyTheme(withDefaults(store.get('globalTheme', null)));
 
 function route() {
   const p = location.hash.replace(/^#\/?/, '').split('/');
@@ -161,6 +337,9 @@ function renderSidebar() {
 function renderMain() {
   const r = route();
   const main = $('.main');
+  const theme = currentTheme();
+  applyTheme(theme);
+  if (state.themedRoute !== location.hash) { state.layout = theme.cards.layout; state.themedRoute = location.hash; }
   const search = h('input', { class: 'input', placeholder: 'Search everything…  ( / )', value: state.q, id: 'q',
     oninput: debounce(async e => { state.q = e.target.value.trim(); if (!route().filter) location.hash = '#/'; await loadItems(); renderList(); }, 250) });
   const topbar = h('div', { class: 'topbar' },
@@ -169,7 +348,7 @@ function renderMain() {
     r.filter ? [
       h('select', { class: 'input', style: { width: 'auto' }, onchange: async e => { state.sort = e.target.value; store.set('sort', state.sort); await loadItems(); renderList(); } },
         [['', state.q ? 'Relevance' : 'Newest'], ['oldest', 'Oldest'], ['title', 'Title']].map(([v, l]) => h('option', { value: v, selected: state.sort === v }, l))),
-      h('button', { class: 'btn', title: 'Toggle layout', onclick: () => { state.layout = state.layout === 'grid' ? 'list' : 'grid'; store.set('layout', state.layout); renderList(); } }, state.layout === 'grid' ? '☰' : '▦'),
+      h('button', { class: 'btn', title: 'Toggle layout', onclick: e => { state.layout = state.layout === 'grid' ? 'list' : 'grid'; e.currentTarget.textContent = state.layout === 'grid' ? '☰' : '▦'; renderList(); } }, state.layout === 'grid' ? '☰' : '▦'),
     ] : null,
   );
   const content = h('div', { class: 'content' });
@@ -177,16 +356,15 @@ function renderMain() {
   if (r.kind === 'spaces') return renderSpaces(content);
   if (r.kind === 'settings') return renderSettings(content);
 
-  const titleRow = h('div', { class: 'page-title' }, r.icon ? h('span', { style: { fontSize: '20px' } }, r.icon) : null, h('h2', {}, r.title),
-    h('span', { class: 'grow' }),
-    r.kind === 'collection' ? [
-      h('button', { class: 'btn small', onclick: () => editCollection(r.id) }, 'Edit'),
-    ] : null,
+  const actions = () => [
+    h('button', { class: 'btn small', title: r.kind === 'collection' ? 'Theme for this collection' : 'Global theme', onclick: openThemeEditor }, '🎨 Theme'),
+    r.kind === 'collection' ? h('button', { class: 'btn small', onclick: () => editCollection(r.id) }, 'Edit') : null,
     r.kind === 'tag' ? [
       h('button', { class: 'btn small', onclick: () => renameTag(r.filter.tag) }, 'Rename'),
       h('button', { class: 'btn small danger', onclick: () => deleteTag(r.filter.tag) }, 'Delete tag'),
-    ] : null);
-  content.append(titleRow);
+    ] : null];
+  headerFor = (rr, t) => pageHeader(rr, t, actions());
+  content.append(headerFor(r, theme));
   if (['all', 'collection', 'unsorted', 'notes', 'tag'].includes(r.kind)) content.append(composer(r));
   content.append(h('div', { id: 'list' }));
   renderList();
@@ -454,14 +632,12 @@ async function renderSpaces(el) {
 async function renderSettings(el) {
   const tokens = await api('/tokens');
   const tokenOut = h('div');
-  const theme = store.get('theme', 'auto');
   el.append(
     h('div', { class: 'page-title' }, h('h2', {}, 'Settings')),
     h('section', { class: 'panel' }, h('h3', {}, 'Account'),
       h('p', {}, 'Signed in as ', h('b', {}, state.me.username), state.me.aiEnabled ? ' · ✦ AI tagging enabled' : ' · AI tagging off (set AI_PROVIDER to enable)'),
       h('div', { class: 'row' },
-        h('label', {}, 'Theme '), h('select', { class: 'input', style: { width: 'auto' }, onchange: e => { store.set('theme', e.target.value); document.documentElement.dataset.theme = e.target.value; } },
-          ['auto', 'light', 'dark'].map(t => h('option', { selected: t === theme }, t))),
+        h('button', { class: 'btn', onclick: () => { location.hash = '#/'; setTimeout(openThemeEditor, 50); } }, '🎨 Customize theme'),
         h('span', { class: 'grow' }),
         installPrompt ? h('button', { class: 'btn primary', onclick: async () => {
           installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; } }, '📲 Install app') : null,
@@ -571,7 +747,7 @@ window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); instal
 // ───────── boot ─────────
 async function boot() {
   let offline = false;
-  try { state.me = await api('/me'); store.set('me', state.me); }
+  try { state.me = await api('/me'); store.set('me', state.me); store.set('globalTheme', state.me.theme); }
   catch (e) { state.me = null; offline = e instanceof TypeError; } // TypeError = network failure
   // Offline but signed in before: keep going so shares can be queued.
   if (!state.me && offline && store.get('me')) state.me = store.get('me');
@@ -579,6 +755,7 @@ async function boot() {
   $('#app').replaceChildren();
   await loadMeta().catch(() => {});
   flushQueue();
+  applyTheme(withDefaults(state.me.theme));
   const share = sharedPayload();
   if (share) return renderShare(share);
   render(); await loadItems(); renderList();

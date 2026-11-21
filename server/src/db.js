@@ -97,6 +97,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS bookmarks_fts USING fts5(
 );
 `);
 
+// Migrations for columns added after the first release
+for (const [table, col] of [['users', 'theme'], ['collections', 'theme']]) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} TEXT`);
+}
+
 /** Rebuild the full-text row for one bookmark. */
 function reindex(id) {
   const b = db.prepare('SELECT * FROM bookmarks WHERE id = ?').get(id);

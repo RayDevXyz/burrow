@@ -24,7 +24,12 @@ burrow/
 - **Import** Netscape bookmark HTML from Chrome, Firefox, Pocket, Raindrop, Linkwarden or Hoarder; folders become collections. Also imports Burrow JSON.
 - **Export** as JSON (everything) or bookmark HTML.
 - A **Tab spaces** page shows the workspaces and stacks synced from the extension.
-- Multi-user (opt-in), API tokens, light/dark theme, mobile layout.
+- **Themes**: a global theme for Home and every page, and each collection can have its own. Tap **🎨 Theme** in a page header to edit with a live preview:
+  - Accent color and light/dark/auto mode
+  - A background image (upload or URL) or gradient, with blur and dim controls
+  - A page header with emoji, subtitle and an optional gradient or image banner
+  - Card layout (grid/list), size, corner radius and see-through "glass" cards
+- Multi-user (opt-in), API tokens, mobile layout.
 
 **Chrome extension**
 - **Popup**: save the current page with title, tags, collection and note. It shows when a page is already saved and lets you edit it.

@@ -8,6 +8,8 @@ const auth = require('./auth');
 const { setTags, tagsFor, pruneOrphanTags } = require('./tags');
 const { enqueue } = require('./worker');
 const { aiEnabled } = require('./ai');
+const { sanitizeTheme } = require('./theme');
+const crypto = require('crypto');
 
 const api = express.Router();
 const upload = multer({ dest: path.join(DATA_DIR, 'uploads'), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -52,8 +54,36 @@ api.post('/auth/logout', (req, res) => {
 api.use(auth.requireAuth);
 
 api.get('/me', (req, res) => {
-  const u = db.prepare('SELECT id, username, created_at FROM users WHERE id = ?').get(req.userId);
-  res.json({ ...u, aiEnabled: aiEnabled() });
+  const u = db.prepare('SELECT id, username, created_at, theme FROM users WHERE id = ?').get(req.userId);
+  res.json({ ...u, theme: u.theme ? JSON.parse(u.theme) : null, aiEnabled: aiEnabled() });
+});
+
+// Global theme: used for Home and every page without its own collection theme
+api.put('/me/theme', (req, res) => {
+  const theme = sanitizeTheme(req.body?.theme);
+  db.prepare('UPDATE users SET theme = ? WHERE id = ?').run(theme ? JSON.stringify(theme) : null, req.userId);
+  res.json({ theme });
+});
+
+// ───────────────────────── Theme images (backgrounds & banners) ─────────────────────────
+const themeUpload = multer({
+  storage: multer.diskStorage({
+    destination: path.join(DATA_DIR, 'uploads'),
+    filename: (req, file, cb) => cb(null, `theme-${req.userId}-${crypto.randomBytes(12).toString('hex')}${
+      { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp', 'image/avif': '.avif' }[file.mimetype] || '.bin'}`),
+  }),
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(null, /^image\/(png|jpeg|gif|webp|avif)$/.test(file.mimetype)),
+});
+api.post('/theme-images', themeUpload.single('image'), (req, res) => {
+  if (!req.file) return bad(res, 'Upload a PNG, JPEG, GIF, WebP or AVIF image');
+  res.status(201).json({ url: `/api/theme-images/${req.file.filename}` });
+});
+api.get('/theme-images/:name', (req, res) => {
+  const name = req.params.name;
+  if (!new RegExp(`^theme-${req.userId}-[a-f0-9]{24}\\.(png|jpg|gif|webp|avif)$`).test(name)) return bad(res, 'Not found', 404);
+  res.set({ 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+  res.sendFile(path.join(DATA_DIR, 'uploads', name), err => { if (err && !res.headersSent) bad(res, 'Not found', 404); });
 });
 
 api.post('/me/password', (req, res) => {
@@ -307,7 +337,8 @@ api.delete('/tags/:id', (req, res) => {
 // ───────────────────────── Collections ─────────────────────────
 api.get('/collections', (req, res) => {
   res.json(db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM bookmarks b WHERE b.collection_id = c.id AND b.archived = 0) AS count
-    FROM collections c WHERE c.user_id = ? ORDER BY lower(c.name)`).all(req.userId));
+    FROM collections c WHERE c.user_id = ? ORDER BY lower(c.name)`).all(req.userId)
+    .map(c => ({ ...c, theme: c.theme ? JSON.parse(c.theme) : null })));
 });
 api.post('/collections', (req, res) => {
   const { name, icon, color, parentId } = req.body || {};
@@ -320,7 +351,10 @@ api.patch('/collections/:id', (req, res) => {
   const c = db.prepare('SELECT * FROM collections WHERE id = ? AND user_id = ?').get(int(req.params.id), req.userId);
   if (!c) return bad(res, 'Not found', 404);
   const { name = c.name, icon = c.icon, color = c.color } = req.body || {};
-  db.prepare('UPDATE collections SET name = ?, icon = ?, color = ? WHERE id = ?').run(name, icon, color, c.id);
+  // theme: object = set, null = go back to the global theme, absent = unchanged
+  const theme = 'theme' in (req.body || {}) ? sanitizeTheme(req.body.theme) : (c.theme ? JSON.parse(c.theme) : null);
+  db.prepare('UPDATE collections SET name = ?, icon = ?, color = ?, theme = ? WHERE id = ?')
+    .run(String(name).trim().slice(0, 80) || c.name, icon, color, theme ? JSON.stringify(theme) : null, c.id);
   res.json({ ok: true });
 });
 api.delete('/collections/:id', (req, res) => {
