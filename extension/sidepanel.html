@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Burrow tabs</title>
+  <link rel="stylesheet" href="ui.css">
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header class="top">
+    <div class="row">
+      <div class="brand grow"><img src="icons/32.png" alt="">Burrow</div>
+      <button class="btn icon" id="sync" title="Sync now">⟳</button>
+      <button class="btn icon" id="web" title="Open Burrow web app">↗</button>
+      <button class="btn icon" id="opts" title="Settings">⚙</button>
+    </div>
+    <div id="current" class="current"></div>
+    <input class="input" id="search" placeholder="Search tabs, spaces, stacks & Burrow…  ( / )">
+    <nav class="seg">
+      <button data-view="tabs" class="on">Tabs <span id="n-tabs"></span></button>
+      <button data-view="spaces">Workspaces <span id="n-spaces"></span></button>
+      <button data-view="stacks">Stacks <span id="n-stacks"></span></button>
+    </nav>
+  </header>
+  <main id="view"></main>
+  <div id="selbar" class="selbar" hidden></div>
+  <div id="toast"></div>
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>

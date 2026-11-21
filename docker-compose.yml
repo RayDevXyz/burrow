@@ -1,0 +1,46 @@
+# Burrow — self-hosted bookmarks, archive & tab spaces
+#
+#   Start:            docker compose up -d --build
+#   With local AI:    docker compose --profile ollama up -d --build
+#                     then: docker compose exec ollama ollama pull llama3.2
+#   Logs:             docker compose logs -f burrow
+#   Update:           git pull && docker compose up -d --build
+#
+# Settings are read from a .env file next to this one (copy .env.example to .env).
+
+services:
+  burrow:
+    build: ./server
+    image: burrow:latest
+    container_name: burrow
+    restart: unless-stopped
+    ports:
+      - "${BURROW_PORT:-3000}:3000"
+    volumes:
+      - burrow-data:/data          # database, page archives, uploads
+    environment:
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-false}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      BLOCK_PRIVATE_URLS: ${BLOCK_PRIVATE_URLS:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-}
+      AI_MODEL: ${AI_MODEL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Optional fully-local AI tagging. Only starts with: --profile ollama
+  ollama:
+    image: ollama/ollama:latest
+    container_name: burrow-ollama
+    restart: unless-stopped
+    profiles: ["ollama"]
+    volumes:
+      - ollama-models:/root/.ollama
+
+volumes:
+  burrow-data:
+  ollama-models:

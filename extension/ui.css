@@ -1,0 +1,32 @@
+:root {
+  --bg: #ffffff; --panel: #f6f5fb; --border: #e3e0ef; --text: #1d1a2b; --muted: #6d6884;
+  --accent: #7c5cff; --accent-2: #ede8ff; --danger: #e5484d; --ok: #30a46c; color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #17161f; --panel: #201f2b; --border: #2e2c40; --text: #ecebf5; --muted: #9a97b0; --accent: #9b83ff; --accent-2: #2c2648; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.btn { background: var(--panel); border: 1px solid var(--border); border-radius: 7px; padding: 5px 10px; display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.danger { color: var(--danger); }
+.btn.small { padding: 2px 7px; font-size: 12px; }
+.btn.icon { padding: 3px 6px; background: transparent; border-color: transparent; color: var(--muted); }
+.btn.icon:hover { color: var(--text); background: var(--panel); }
+.input { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; outline: none; }
+.input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-2); }
+.row { display: flex; gap: 6px; align-items: center; }
+.grow { flex: 1; min-width: 0; }
+.muted { color: var(--muted); }
+.wrap { flex-wrap: wrap; }
+label.lbl { display: block; font-size: 11px; font-weight: 600; color: var(--muted); margin: 8px 0 3px; text-transform: uppercase; letter-spacing: .04em; }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; }
+.brand img { width: 22px; height: 22px; }
+.ellipsis { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.chip { font-size: 11px; background: var(--accent-2); color: var(--accent); border-radius: 999px; padding: 1px 7px; }
+.notice { background: var(--accent-2); border-radius: 8px; padding: 10px; }
+.err { color: var(--danger); }
+.ok { color: var(--ok); }

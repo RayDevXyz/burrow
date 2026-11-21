@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="ui.css">
+  <style>
+    body { width: 360px; padding: 12px; }
+    header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .page { display: flex; gap: 8px; align-items: center; background: var(--panel); border-radius: 8px; padding: 8px; }
+    .page img { width: 20px; height: 20px; }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 12px; }
+    textarea { resize: vertical; }
+    #status { min-height: 18px; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand grow"><img src="icons/32.png" alt="">Burrow</div>
+    <button class="btn icon" id="settings" title="Settings">⚙</button>
+  </header>
+  <div id="root"></div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,134 @@
+# 🦫 Burrow
+
+A self-hosted bookmark manager, read-it-later app and web archive (in the spirit of Hoarder/Karakeep and Linkwarden), plus a Chrome extension for tab workspaces and stashed tab stacks (in the spirit of Workona and Stackable).
+
+```
+burrow/
+├── docker-compose.yml
+├── server/        Node 22 + Express + SQLite (FTS5). No native deps, no build step.
+│   ├── src/       API, page fetcher/archiver, AI tagger
+│   └── public/    Web app (vanilla JS SPA)
+└── extension/     Chrome MV3 extension (popup, side panel, options)
+```
+
+## Features
+
+**Server / web app**
+- Save **links**, **notes** and **files** (images, PDFs, anything up to 50 MB). You can drag and drop into the composer.
+- Each link is fetched in the background to get its title, description, preview image, favicon and author.
+- **Reader view**: a clean article extracted with Mozilla Readability.
+- **Snapshot archive**: a static HTML copy of every page, with scripts stripped. It's served in a sandbox and can be downloaded, so it stays readable after the original page disappears.
+- **Full-text search** across titles, notes, URLs, tags and page content. Uses SQLite FTS5 with prefix matching.
+- **Tags** (rename/merge/delete), **collections**, **favorites**, **archive**, **bulk actions** (tag, move, archive, delete).
+- Optional **AI auto-tagging** with Claude or a local Ollama model. AI tags show as `✦ tag`.
+- **Import** Netscape bookmark HTML from Chrome, Firefox, Pocket, Raindrop, Linkwarden or Hoarder; folders become collections. Also imports Burrow JSON.
+- **Export** as JSON (everything) or bookmark HTML.
+- A **Tab spaces** page shows the workspaces and stacks synced from the extension.
+- Multi-user (opt-in), API tokens, light/dark theme, mobile layout.
+
+**Chrome extension**
+- **Popup**: save the current page with title, tags, collection and note. It shows when a page is already saved and lets you edit it.
+- **Side panel tab manager** (`Alt+Shift+T`):
+  - **Tabs**: all windows, grouped by tab group, plus:
+    - Close duplicates, group by site, ungroup and sort
+    - Stash all tabs, or save all tabs to Burrow
+    - Multi-select to stash, group, save, close or make a workspace
+  - **Workspaces** (Workona-style): a named set of tabs.
+    - Switching swaps the window's tabs, restoring pins and tab groups.
+    - The active workspace **auto-saves** as you browse.
+    - Open a workspace in a new window, rename it, or set a color or emoji.
+  - **Stacks** (Stackable-style): stash a tab, tab group or whole window to free memory, then restore it later.
+    - Drag a tab onto a stack, or choose "Stash into…" to add to an existing one.
+    - Restore all or single tabs, keep the stack after restoring, or convert it into a workspace.
+  - **Search** across open tabs, workspaces, stacks *and* your Burrow bookmarks.
+- Right-click menu: save page, link or selection (as a note); stash tab or window.
+- Shortcuts: `Alt+Shift+S` open popup, `Alt+Shift+B` instant save. A toolbar badge shows ✓ on pages you've already saved.
+- Workspaces and stacks are **synced to your server** using last-write-wins per space, so they follow you between computers.
+
+## Run the server
+
+### Docker (recommended)
+
+```bash
+docker compose up -d --build
+```
+
+Open <http://localhost:3000>. The first account you create becomes the owner. Data lives in the `burrow-data` volume (`/data`: `burrow.db`, `archives/`, `uploads/`).
+
+### Without Docker
+
+Needs Node.js **22.13+**, which includes the built-in `node:sqlite`.
+
+```bash
+cd server
+npm install
+npm start
+```
+
+Data goes to `server/data/` unless you set `DATA_DIR`.
+
+### Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PORT` | `3000` | HTTP port |
+| `DATA_DIR` | `./data` | Database, archives and uploads |
+| `ALLOW_SIGNUP` | `false` | Let more people register after the first account |
+| `TRUST_PROXY` | `false` | Set `true` behind an HTTPS reverse proxy (for secure cookies) |
+| `BLOCK_PRIVATE_URLS` | `false` | Refuse to fetch LAN/localhost URLs. Turn this on if you allow sign-ups. |
+| `AI_PROVIDER` | *(off)* | `anthropic` or `ollama` |
+| `ANTHROPIC_API_KEY` | | Required for `anthropic` |
+| `AI_MODEL` | `claude-opus-5-5` / `llama3.2` | Model used for tagging. `claude-haiku-5-5` is a much cheaper Claude option. |
+| `OLLAMA_URL` | `http://localhost:11434` | For `ollama` |
+
+When Claude tagging is on, Burrow enables the API's server-side refusal fallback. If a request is declined, the API retries it on a fallback model within the same call.
+
+For HTTPS, put Burrow behind Caddy, Traefik or nginx and set `TRUST_PROXY=true`. With Caddy, for example:
+
+```
+burrow.example.com {
+  reverse_proxy localhost:3000
+}
+```
+
+## Install the extension
+
+1. Open `chrome://extensions` and turn on **Developer mode**.
+2. Click **Load unpacked** and pick the `extension/` folder. It also works in Edge, Brave, Arc and Vivaldi.
+3. The options page opens. In the Burrow web app, go to **Settings → New token**, then paste the server URL and token and click **Save & test**.
+4. Pin the extension. Use the popup to save pages, and `Alt+Shift+T` (or "Tab manager" in the popup) for workspaces and stacks.
+
+The extension talks to your server with a Bearer token over CORS, so it needs no host permissions.
+
+## API
+
+Every endpoint is under `/api` and authenticates with either the session cookie or `Authorization: Bearer <token>`.
+
+| Method | Path | |
+|---|---|---|
+| GET | `/bookmarks?q=&tag=&collection=&favorite=1&archived=1&type=link\|note\|file&sort=&limit=&offset=` | List and search |
+| POST | `/bookmarks` `{url \| note, title?, tags?, collectionId?}` | Create (returns the existing item if the URL is already saved) |
+| POST | `/bookmarks/upload` (multipart `file`) | Upload a file |
+| GET/PATCH/DELETE | `/bookmarks/:id` | Read, update or delete one item |
+| POST | `/bookmarks/:id/refetch` | Re-fetch and re-archive |
+| GET | `/bookmarks/:id/archive`, `/bookmarks/:id/file` | Snapshot, file |
+| GET | `/bookmarks/lookup?url=` | Is this URL saved? |
+| POST | `/bookmarks/bulk` `{ids, action: delete\|archive\|favorite\|move\|tag, value}` | Bulk actions |
+| GET/PATCH/DELETE | `/tags`, `/tags/:id` | Tags |
+| GET/POST/PATCH/DELETE | `/collections`, `/collections/:id` | Collections |
+| GET, POST | `/spaces`, `/spaces/sync` | Extension workspaces and stacks |
+| GET, POST | `/export?format=html`, `/import` | Export, import |
+
+Example:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"url":"https://example.com","tags":["demo"]}' http://localhost:3000/api/bookmarks
+```
+
+## Security notes
+
+- Passwords are hashed with scrypt. API tokens and sessions are stored only as SHA-256 hashes.
+- Archived pages and the reader view are rendered in sandboxed frames with `CSP: sandbox`, so archived content can't run scripts or read your session.
+- Uploaded files are served with `nosniff` and a sandbox CSP. Anything that isn't an image, PDF or plain text is downloaded rather than displayed.
+- Cross-origin API calls only work with a Bearer token; cookies are never accepted cross-origin.

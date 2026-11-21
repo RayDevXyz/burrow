@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Burrow — Bookmarks & Tab Spaces",
+  "short_name": "Burrow",
+  "version": "1.0.0",
+  "description": "Save pages to your self-hosted Burrow server and organize tabs into workspaces and stacks.",
+  "permissions": ["tabs", "tabGroups", "storage", "sidePanel", "contextMenus", "alarms", "favicon"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Save to Burrow",
+    "default_icon": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" }
+  },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "options_page": "options.html",
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "commands": {
+    "_execute_action": { "suggested_key": { "default": "Alt+Shift+S" }, "description": "Open the save popup" },
+    "save-page": { "suggested_key": { "default": "Alt+Shift+B" }, "description": "Save current page to Burrow instantly" },
+    "open-panel": { "suggested_key": { "default": "Alt+Shift+T" }, "description": "Open the tab manager side panel" },
+    "stash-tab": { "description": "Stash the current tab into a new stack" }
+  }
+}
