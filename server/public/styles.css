@@ -125,7 +125,12 @@ code.token { display: block; padding: 10px; background: var(--panel-2); border-r
 .auth form { background: var(--panel); border: 1px solid var(--border); padding: 28px; border-radius: 16px; width: min(380px, 100%); display: flex; flex-direction: column; gap: 12px; box-shadow: var(--shadow); }
 .auth .err { color: var(--danger); min-height: 1em; font-size: 13px; }
 
-#toast { position: fixed; bottom: 20px; right: 20px; z-index: 100; display: flex; flex-direction: column; gap: 8px; }
+/* Share sheet (Android share target) */
+.share-card { background: var(--panel); border: 1px solid var(--border); padding: 22px; border-radius: 16px; width: min(440px, 100%); display: flex; flex-direction: column; gap: 12px; box-shadow: var(--shadow); }
+.share-url { font-size: 13px; color: var(--accent); word-break: break-all; background: var(--accent-2); border-radius: 8px; padding: 8px 10px; }
+.share-card .input { font-size: 16px; } /* 16px stops mobile browsers zooming on focus */
+
+#toast {position: fixed; bottom: 20px; right: 20px; z-index: 100; display: flex; flex-direction: column; gap: 8px; }
 #toast div { background: var(--text); color: var(--bg); padding: 10px 14px; border-radius: 10px; box-shadow: var(--shadow); animation: slide .2s; }
 
 @media (max-width: 800px) {

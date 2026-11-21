@@ -463,6 +463,8 @@ async function renderSettings(el) {
         h('label', {}, 'Theme '), h('select', { class: 'input', style: { width: 'auto' }, onchange: e => { store.set('theme', e.target.value); document.documentElement.dataset.theme = e.target.value; } },
           ['auto', 'light', 'dark'].map(t => h('option', { selected: t === theme }, t))),
         h('span', { class: 'grow' }),
+        installPrompt ? h('button', { class: 'btn primary', onclick: async () => {
+          installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; } }, '📲 Install app') : null,
         h('button', { class: 'btn', onclick: () => dialog('Change password', [{ label: 'Current password' }, { label: 'New password' }], async ([current, next]) => {
           await api('/me/password', { method: 'POST', body: { current, next } }); toast('Password changed'); }) }, 'Change password'),
         h('button', { class: 'btn', onclick: async () => { await api('/auth/logout', { method: 'POST' }); location.reload(); } }, 'Sign out'))),
@@ -492,13 +494,96 @@ async function renderSettings(el) {
   );
 }
 
+// ───────── share target (Android share sheet → /share?title=&text=&url=) ─────────
+function sharedPayload() {
+  if (location.pathname !== '/share') return null;
+  const p = new URLSearchParams(location.search);
+  const text = (p.get('text') || '').trim();
+  let url = (p.get('url') || '').trim();
+  // Most Android apps put the link inside "text", often after a description.
+  if (!url) url = (text.match(/https?:\/\/[^\s]+/) || [''])[0];
+  let note = url ? text.replace(url, '').trim() : text;
+  const title = (p.get('title') || '').trim();
+  if (note === title) note = '';
+  return { url, title, note };
+}
+function leaveShare() { history.replaceState(null, '', '/'); boot(); }
+
+// Shares made while offline are queued and sent the next time Burrow opens.
+const queue = { get: () => store.get('pendingShares', []), set: v => store.set('pendingShares', v) };
+async function flushQueue() {
+  const pending = queue.get(); if (!pending.length) return;
+  const left = [];
+  for (const body of pending) { try { await api('/bookmarks', { method: 'POST', body }); } catch { left.push(body); } }
+  queue.set(left);
+  if (pending.length > left.length) toast(`Synced ${pending.length - left.length} item(s) shared while offline`);
+}
+
+function renderShare(share) {
+  const title = h('input', { class: 'input', value: share.title, placeholder: share.url ? 'Fetched automatically if empty' : 'Title' });
+  const tags = h('input', { class: 'input', placeholder: 'reading, recipes', list: 'share-tags', autocapitalize: 'none' });
+  const col = h('select', { class: 'input' }, h('option', { value: '' }, '— Unsorted —'),
+    state.collections.map(c => h('option', { value: c.id }, `${c.icon} ${c.name}`)));
+  const note = h('textarea', { class: 'input', rows: share.url ? 3 : 6, placeholder: share.url ? 'Why are you saving this?' : 'Note' }, share.note);
+  const fav = h('input', { type: 'checkbox' });
+  const msg = h('div', { class: 'err' });
+  const save = h('button', { class: 'btn primary', type: 'submit', style: { justifyContent: 'center', padding: '10px' } }, share.url ? 'Save link' : 'Save note');
+
+  const done = (icon, text) => $('#app').replaceChildren(h('div', { class: 'auth' }, h('div', { class: 'share-card', style: { textAlign: 'center' } },
+    h('div', { style: { fontSize: '44px' } }, icon), h('h3', {}, text),
+    h('button', { class: 'btn primary', style: { justifyContent: 'center' }, onclick: leaveShare }, 'Open Burrow'),
+    h('button', { class: 'btn', style: { justifyContent: 'center' }, onclick: () => { window.close(); leaveShare(); } }, 'Close'))));
+
+  const form = h('form', { class: 'share-card', onsubmit: async e => {
+    e.preventDefault(); save.disabled = true; msg.textContent = '';
+    const body = {
+      ...(share.url ? { url: share.url } : {}),
+      title: title.value.trim() || undefined,
+      note: note.value.trim() || (share.url ? undefined : title.value.trim()),
+      tags: tags.value.split(',').map(t => t.trim()).filter(Boolean),
+      collectionId: col.value || null, favorite: fav.checked,
+    };
+    try {
+      const r = await api('/bookmarks', { method: 'POST', body });
+      done('✓', r.duplicate ? 'Already in your Burrow — tags added' : 'Saved to Burrow');
+    } catch (err) {
+      if (!navigator.onLine || err instanceof TypeError) { queue.set([...queue.get(), body]); done('📥', 'You’re offline — it will be saved next time you open Burrow'); }
+      else { msg.textContent = err.message; save.disabled = false; }
+    }
+  } },
+    h('div', { class: 'brand' }, h('img', { src: '/icon.svg', alt: '' }), share.url ? 'Save link' : 'Save note'),
+    share.url ? h('div', { class: 'share-url' }, share.url) : null,
+    h('div', { class: 'field' }, h('label', {}, 'Title'), title),
+    h('div', { class: 'field' }, h('label', {}, 'Tags'), tags, h('datalist', { id: 'share-tags' }, state.tags.map(t => h('option', { value: t.name })))),
+    h('div', { class: 'field' }, h('label', {}, 'Collection'), col),
+    h('div', { class: 'field' }, h('label', {}, share.url ? 'Note' : 'Text'), note),
+    h('label', { class: 'row' }, fav, ' ★ Favorite'),
+    msg, save,
+    h('button', { class: 'btn', type: 'button', style: { justifyContent: 'center' }, onclick: leaveShare }, 'Cancel'));
+  $('#app').replaceChildren(h('div', { class: 'auth' }, form));
+  if (!share.url && !share.note && !share.title) leaveShare();
+}
+
+// "Install app" button (Android/desktop Chrome) — appears in Settings when installable.
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; });
+
 // ───────── boot ─────────
 async function boot() {
-  try { state.me = await api('/me'); } catch { state.me = null; }
-  if (!state.me) { state.status = await api('/auth/status'); return render(); }
+  let offline = false;
+  try { state.me = await api('/me'); store.set('me', state.me); }
+  catch (e) { state.me = null; offline = e instanceof TypeError; } // TypeError = network failure
+  // Offline but signed in before: keep going so shares can be queued.
+  if (!state.me && offline && store.get('me')) state.me = store.get('me');
+  if (!state.me) { store.set('me', null); state.status = await api('/auth/status'); return render(); }
   $('#app').replaceChildren();
-  await loadMeta(); render(); await loadItems(); renderList();
+  await loadMeta().catch(() => {});
+  flushQueue();
+  const share = sharedPayload();
+  if (share) return renderShare(share);
+  render(); await loadItems(); renderList();
 }
+window.addEventListener('online', () => { if (state.me) flushQueue().then(() => refresh()); });
 window.addEventListener('hashchange', async () => {
   if (!state.me) return;
   state.selected.clear(); closeDrawer();

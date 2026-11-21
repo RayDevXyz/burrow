@@ -2,14 +2,20 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Burrow</title>
+  <meta name="theme-color" content="#7c5cff">
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/192.png">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <div id="app"></div>
   <div id="toast"></div>
   <script src="/app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  </script>
 </body>
 </html>

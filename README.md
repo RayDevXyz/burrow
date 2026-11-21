@@ -112,6 +112,16 @@ burrow.example.com {
 
 The extension talks to your server with a Bearer token over CORS, so it needs no host permissions.
 
+## Android app (share menu)
+
+Burrow installs as an app on Android. Once it's installed, **Burrow appears in the share menu** of Chrome, YouTube, Reddit and other apps, so you can save links and text from anywhere.
+
+1. On your phone, open your Burrow URL in **Chrome** and sign in. The site needs HTTPS (a Cosmos URL or another reverse proxy provides it).
+2. Tap **⋮ → Install app** (on some phones it's **Add to Home screen → Install**). You can also use **Settings → 📲 Install app** inside Burrow.
+3. In any app, tap **Share → Burrow**. Add tags, a collection or a note if you like, then tap **Save link**.
+
+Shared text without a link is saved as a note. If your phone is offline, shares are queued and sent the next time you open Burrow. The share menu works on Android with Chrome, Edge or Samsung Internet; iPhone doesn't let web apps appear in the share menu.
+
 ## API
 
 Every endpoint is under `/api` and authenticates with either the session cookie or `Authorization: Bearer <token>`.
