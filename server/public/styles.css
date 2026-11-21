@@ -218,7 +218,7 @@ a.chip:hover { filter: brightness(1.1); text-decoration: underline; }
 /* ───────── Databases (views, properties) ───────── */
 .opt { --oc: #8b8b93; display: inline-flex; align-items: center; gap: 4px; max-width: 100%; font-size: 12px; line-height: 1.6; padding: 0 8px; border-radius: 6px;
   background: color-mix(in srgb, var(--oc) 22%, transparent); color: color-mix(in srgb, var(--oc) 60%, var(--text)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.opt.status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--oc); flex: none; }
+.opt.is-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--oc); flex: none; }
 .opt.x { cursor: pointer; }
 a.opt:hover { text-decoration: underline; }
 .chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
@@ -239,11 +239,11 @@ a.opt:hover { text-decoration: underline; }
 .linkish { background: none; border: 0; color: var(--accent); padding: 0 2px; font-size: 12px; text-decoration: underline; cursor: pointer; }
 
 .db-tabs { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
-.db-tabs-scroll { display: flex; gap: 2px; overflow-x: auto; flex: 1; min-width: 0; scrollbar-width: none; align-items: center; }
+.db-tabs-scroll { position: relative; display: flex; gap: 2px; overflow-x: auto; flex: 1; min-width: 0; scrollbar-width: none; align-items: center; }
 .db-tab { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 10px; color: var(--muted); white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
 .db-tab:hover { color: var(--text); }
 .db-tab.on { color: var(--text); border-bottom-color: var(--text); font-weight: 600; }
-.db-tab.add { opacity: .75; }
+.db-tab.add { opacity: .75; flex: none; }
 .db-dash-label { padding: 8px 4px; font-size: 13px; }
 .db-layout { flex: none; font-size: 12px; }
 .db-layout button { padding: 3px 9px; }
@@ -355,7 +355,12 @@ body.glass .db-kcard { background: color-mix(in srgb, var(--panel) 72%, transpar
 .db-kv .v.editable { cursor: pointer; }
 .db-kv .v.editable:hover { background: var(--panel-2); }
 @media (max-width: 800px) {
+  /* Phones: tabs scroll on their own row with "+ Add view" pinned; the Tabs/Dashboard switch gets its own line */
+  .db-tabs { flex-wrap: wrap; row-gap: 0; }
+  .db-tabs::after { content: ""; order: 2; flex-basis: 100%; height: 0; } /* line break before the switch */
+  .db-tabs-scroll { flex: 1 1 0; }
+  .db-layout { order: 3; margin: 2px 0 8px; }
+  .db-tab { padding: 10px 10px; }
   .db-pills { max-width: 50%; }
   .db-col { flex-basis: 82vw; }
-  .db-tabs { flex-wrap: wrap; }
 }

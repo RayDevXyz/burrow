@@ -92,7 +92,7 @@ function popover(anchor, build, { width = 280, className = '' } = {}) {
   const close = async () => {
     if (closed) return; closed = true;
     document.removeEventListener('mousedown', outside, true); document.removeEventListener('keydown', key, true);
-    window.removeEventListener('resize', close);
+    window.removeEventListener('resize', place); window.visualViewport?.removeEventListener('resize', place); window.visualViewport?.removeEventListener('scroll', place);
     if (pop?.el === el) pop = null;
     el.remove();
     if (commit) await commit();
@@ -101,13 +101,29 @@ function popover(anchor, build, { width = 280, className = '' } = {}) {
   const key = e => { if (!closed && e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); close(); } };
   pop = { el, close };
   commit = build(el, close) || null;
-  const r = anchor.getBoundingClientRect(), w = el.offsetWidth, hgt = el.offsetHeight;
-  let left = Math.min(Math.max(8, r.left), innerWidth - w - 8);
-  let top = r.bottom + 4;
-  if (top + hgt > innerHeight - 8) top = Math.max(8, r.top - hgt - 4);
-  Object.assign(el.style, { left: left + 'px', top: top + 'px' });
-  // Listen on the next tick (so the opening click doesn't close it) — but only if it's still open.
-  setTimeout(() => { if (closed) return; document.addEventListener('mousedown', outside, true); document.addEventListener('keydown', key, true); window.addEventListener('resize', close); });
+  // Position next to the anchor, inside the visible area. On phones the on-screen keyboard
+  // shrinks the visual viewport, so re-place the popover above it instead of closing.
+  function place() {
+    if (closed) return;
+    const vv = window.visualViewport;
+    const vTop = vv ? vv.offsetTop : 0, vLeft = vv ? vv.offsetLeft : 0;
+    const vH = vv ? vv.height : innerHeight, vW = vv ? vv.width : innerWidth;
+    el.style.maxHeight = Math.max(160, Math.min(560, vH - 16)) + 'px';
+    const r = anchor.isConnected ? anchor.getBoundingClientRect() : { left: vLeft + 8, right: vLeft + 8, top: vTop + 8, bottom: vTop + 8 };
+    const w = el.offsetWidth, hgt = el.offsetHeight;
+    const left = Math.min(Math.max(vLeft + 8, r.left), vLeft + vW - w - 8);
+    let top = r.bottom + 4;
+    if (top + hgt > vTop + vH - 8) top = r.top - hgt - 4;          // flip above the anchor
+    top = Math.min(Math.max(vTop + 8, top), vTop + vH - hgt - 8);   // keep it on screen
+    Object.assign(el.style, { left: Math.max(vLeft + 8, left) + 'px', top: Math.max(vTop + 8, top) + 'px' });
+  }
+  place();
+  // Listen on the next tick (so the opening tap doesn't close it) — but only if it's still open.
+  setTimeout(() => {
+    if (closed) return;
+    document.addEventListener('mousedown', outside, true); document.addEventListener('keydown', key, true);
+    window.addEventListener('resize', place); window.visualViewport?.addEventListener('resize', place); window.visualViewport?.addEventListener('scroll', place);
+  });
   el.querySelector('input:not([type=checkbox]),textarea,select')?.focus();
   return { el, close };
 }
@@ -362,7 +378,7 @@ function renderValue(item, prop, schema, ctx, { compact = false } = {}) {
     }
     case 'select': case 'status': {
       const o = (cfg.options || []).find(o => o.id === v); if (!o) return null;
-      return prop.type === 'status' ? chip(o.name, o.color, { class: 'opt status' }) : chip(o.name, o.color);
+      return prop.type === 'status' ? chip(o.name, o.color, { class: 'opt is-status' }) : chip(o.name, o.color);
     }
     case 'multi_select': return v?.length ? h('span', { class: 'chips' }, v.map(id => (cfg.options || []).find(o => o.id === id)).filter(Boolean).map(o => chip(o.name, o.color))) : null;
     case 'tags': return v.length ? h('span', { class: 'chips' }, v.map(n => h('a', { class: 'opt', style: { '--oc': HEX.purple }, href: B().tagHref(n), onclick: e => e.stopPropagation() }, '#' + n))) : null;
@@ -829,9 +845,12 @@ function drawPage(ctx) {
     const tabs = h('div', { class: 'db-tabs' },
       h('div', { class: 'db-tabs-scroll' }, views.map(v => h('button', { class: 'db-tab' + (v === active ? ' on' : ''),
         onclick: e => { if (v === active) return viewMenu(ctx, v, e.currentTarget); ctx.activeId = v.id; B().store.set("view." + ctx.page, v.id); ctx.draw(); },
- }, h('span', { class: 'db-ti' }, VIEW_TYPES[v.type][0]), v.name)), addView),
-      layoutToggle);
+ }, h('span', { class: 'db-ti' }, VIEW_TYPES[v.type][0]), v.name))),
+      addView, layoutToggle);
     container.replaceChildren(tabs, viewBlock(ctx, active, { showTitle: false }));
+    // Keep the active tab visible when the strip scrolls (phones, many views)
+    const strip = tabs.querySelector('.db-tabs-scroll'), on = strip.querySelector('.db-tab.on');
+    if (on && strip.scrollWidth > strip.clientWidth) strip.scrollLeft = Math.max(0, on.offsetLeft - strip.clientWidth / 2 + on.offsetWidth / 2);
   } else {
     container.replaceChildren(h('div', { class: 'db-tabs' }, h('div', { class: 'db-tabs-scroll' }, h('span', { class: 'muted db-dash-label' }, `Dashboard · ${views.length} view${views.length === 1 ? '' : 's'}`), addView), layoutToggle),
       ...views.map(v => viewBlock(ctx, v, { showTitle: true, dashboard: true })));
