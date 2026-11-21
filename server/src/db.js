@@ -103,6 +103,14 @@ for (const [table, col] of [['users', 'theme'], ['collections', 'theme']]) {
   if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} TEXT`);
 }
 
+// Tags are case-insensitive: "key" is the lowercase form used for matching, "name" keeps the original casing.
+if (!db.prepare('PRAGMA table_info(tags)').all().some(c => c.name === 'key')) {
+  db.exec('ALTER TABLE tags ADD COLUMN key TEXT');
+  const upd = db.prepare('UPDATE tags SET key = ? WHERE id = ?');
+  for (const t of db.prepare('SELECT id, name FROM tags').all()) upd.run(t.name.toLowerCase(), t.id);
+}
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_key ON tags(user_id, key)');
+
 /** Rebuild the full-text row for one bookmark. */
 function reindex(id) {
   const b = db.prepare('SELECT * FROM bookmarks WHERE id = ?').get(id);

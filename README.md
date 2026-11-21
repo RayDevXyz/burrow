@@ -19,7 +19,14 @@ burrow/
 - **Reader view**: a clean article extracted with Mozilla Readability.
 - **Snapshot archive**: a static HTML copy of every page, with scripts stripped. It's served in a sandbox and can be downloaded, so it stays readable after the original page disappears.
 - **Full-text search** across titles, notes, URLs, tags and page content. Uses SQLite FTS5 with prefix matching.
-- **Tags** (rename/merge/delete), **collections**, **favorites**, **archive**, **bulk actions** (tag, move, archive, delete).
+- **Tags** that work like Obsidian's:
+  - **Suggestions while typing**: in tag fields, after `#` in notes and the composer, and in the search box.
+  - **Inline tags**: write `#meeting` in a note to tag it. A YAML `tags:` list at the top of a note works too.
+  - **Search**: `tag:#meeting`, `tag:meeting` or just `#meeting`, combined with normal text (`tag:recipe pasta`).
+  - **Nested tags**: `#inbox/to-read` shows under `#inbox` in the sidebar, and `tag:inbox` also matches its nested tags.
+  - **Format**: letters, numbers, `_`, `-`, `/` and emoji; no spaces; at least one non-number (`#1984` isn't a tag, `#y1984` is). Tags are case-insensitive and keep the casing they were first created with.
+  - Click any tag to see everything with it. **Rename** moves nested tags along, merges with an existing tag of the same name, and updates the `#tags` in your notes.
+- **Collections**, **favorites**, **archive**, **bulk actions** (tag, move, archive, delete).
 - Optional **AI auto-tagging** with Claude or a local Ollama model. AI tags show as `✦ tag`.
 - **Import** Netscape bookmark HTML from Chrome, Firefox, Pocket, Raindrop, Linkwarden or Hoarder; folders become collections. Also imports Burrow JSON.
 - **Export** as JSON (everything) or bookmark HTML.

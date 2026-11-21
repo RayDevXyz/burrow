@@ -194,3 +194,23 @@ body.glass .sidebar { background: color-mix(in srgb, var(--panel) 75%, transpare
 .swatches button.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--panel) inset; }
 .swatches input[type=color] { width: 30px; height: 30px; border: 0; padding: 0; background: none; cursor: pointer; }
 .thumb-preview { height: 90px; border-radius: 8px; background-size: cover; background-position: center; border: 1px solid var(--border); }
+
+/* ───────── Tags ───────── */
+.tag-suggest { position: fixed; z-index: 200; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.2); padding: 4px; max-width: 320px; }
+.ts-item { display: flex; justify-content: space-between; gap: 14px; padding: 6px 10px; border-radius: 7px; cursor: pointer; white-space: nowrap; }
+.ts-item span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.ts-item.on, .ts-item:hover { background: var(--accent-2); color: color-mix(in srgb, var(--accent) 75%, var(--text)); }
+.tag-filter { margin: 2px 8px 6px; width: calc(100% - 16px); padding: 5px 8px; font-size: 12px; }
+.tag-tree { display: flex; flex-direction: column; }
+.tt-row { display: flex; align-items: center; gap: 2px; padding-right: 10px; border-radius: 7px; font-size: 13px; }
+.tt-row:hover { background: var(--panel-2); }
+.tt-row.active { background: var(--accent-2); }
+.tt-row.active .tt-name { color: color-mix(in srgb, var(--accent) 75%, var(--text)); font-weight: 600; }
+.tt-toggle { width: 18px; flex: none; background: none; border: 0; color: var(--muted); font-size: 11px; padding: 0; text-align: center; }
+.tt-name { flex: 1; min-width: 0; padding: 4px 2px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tt-row:hover .tt-name { color: var(--text); }
+.tt-row .count { font-size: 11px; color: var(--muted); }
+a.chip:hover { filter: brightness(1.1); text-decoration: underline; }
+.chip.note-tag { background: transparent; border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent); }
+.inline-tag { color: color-mix(in srgb, var(--accent) 80%, var(--text)); font-weight: 500; }
+.inline-tag:hover { text-decoration: underline; }

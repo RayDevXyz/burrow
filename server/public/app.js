@@ -239,11 +239,125 @@ function route() {
       const c = state.collections.find(c => c.id === +p[1]);
       return { kind: 'collection', id: +p[1], title: c?.name || 'Collection', icon: c?.icon || '📁', filter: { collection: p[1] } };
     }
-    case 't': return { kind: 'tag', title: '#' + decodeURIComponent(p[1] || ''), icon: '', filter: { tag: decodeURIComponent(p[1] || '') } };
+    case 't': {
+      const name = decodeURIComponent(p[1] || '');
+      const known = state.tags.find(t => t.name.toLowerCase() === name.toLowerCase());
+      return { kind: 'tag', title: '#' + (known?.name || name), icon: '', filter: { tag: known?.name || name } };
+    }
     case 'spaces': return { kind: 'spaces', title: 'Tab spaces', icon: '🗂' };
     case 'settings': return { kind: 'settings', title: 'Settings', icon: '⚙' };
     default: return { kind: 'all', title: 'Home', icon: '🏠', filter: {} };
   }
+}
+
+// ───────── tags: suggestions, nested tree, clickable #tags ─────────
+const TAG_RE = /[\p{L}\p{N}\p{M}_\-\/\p{Extended_Pictographic}\p{So}‍️]/u;
+const tagHref = name => `#/t/${encodeURIComponent(name)}`;
+
+/** Tags matching a query, best first: prefix match, then a nested part matching (to-read → inbox/to-read), then contains. */
+function matchTags(q, exclude = []) {
+  const k = q.toLowerCase().replace(/^#/, '');
+  const skip = new Set(exclude.map(x => x.toLowerCase()));
+  const score = t => {
+    const key = t.name.toLowerCase();
+    if (!k) return 1;
+    if (key.startsWith(k)) return 3;
+    if (key.split('/').some(p => p.startsWith(k))) return 2;
+    return key.includes(k) ? 1 : 0;
+  };
+  return state.tags.map(t => [t, score(t)]).filter(([t, s]) => s && !skip.has(t.name.toLowerCase()))
+    .sort((a, b) => b[1] - a[1] || b[0].count - a[0].count || a[0].name.localeCompare(b[0].name)).slice(0, 8).map(([t]) => t);
+}
+
+/**
+ * Attach a tag suggestion dropdown to an input or textarea.
+ *  mode 'hash'   → suggests after "#" (notes, composer)
+ *  mode 'search' → suggests after "#" or "tag:" (search box)
+ *  mode 'list'   → the whole value (or the part after the last comma) is the tag being typed
+ * onPick(name) can take over what happens on selection (used by chip inputs).
+ */
+function tagSuggest(input, { mode = 'hash', onPick, exclude = () => [] } = {}) {
+  let box = null, items = [], active = 0, token = null;
+  const close = () => { box?.remove(); box = null; items = []; };
+  const current = () => {
+    const before = input.value.slice(0, input.selectionStart ?? input.value.length);
+    if (mode === 'list') { const m = before.match(/(?:^|,)\s*([^,]*)$/); return m ? { start: before.length - m[1].length, text: m[1], prefix: '' } : null; }
+    const re = mode === 'search' ? /(?:^|\s)(tag:#?|#)([^\s#]*)$/u : /(?:^|[\s(\[,;])(#)([^\s#]*)$/u;
+    const m = before.match(re); if (!m) return null;
+    if (m[2] && ![...m[2]].every(c => TAG_RE.test(c))) return null;
+    return { start: before.length - m[2].length - m[1].length, text: m[2], prefix: m[1] };
+  };
+  function show() {
+    token = current();
+    if (!token || (mode === 'list' && !token.text)) return close();
+    items = matchTags(token.text, exclude());
+    if (!items.length) return close();
+    active = 0;
+    if (!box) { box = h('div', { class: 'tag-suggest' }); document.body.append(box); }
+    const r = input.getBoundingClientRect();
+    Object.assign(box.style, { left: r.left + 'px', top: (r.bottom + 4) + 'px', minWidth: Math.min(r.width, 280) + 'px' });
+    draw();
+  }
+  function draw() {
+    box.replaceChildren(...items.map((t, i) => h('div', { class: 'ts-item' + (i === active ? ' on' : ''),
+      onmousedown: e => { e.preventDefault(); pick(t); } }, h('span', {}, '#' + t.name), h('span', { class: 'muted' }, t.count))));
+  }
+  function pick(t) {
+    close();
+    if (onPick) return onPick(t.name);
+    const v = input.value, end = input.selectionStart ?? v.length;
+    let insert = mode === 'list' ? t.name + ', ' : (token.prefix.startsWith('tag:') ? 'tag:' : '#') + t.name + ' ';
+    const start = mode === 'list' ? token.start : token.start;
+    input.value = v.slice(0, start) + insert + v.slice(end);
+    const pos = start + insert.length; input.setSelectionRange(pos, pos); input.focus();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  input.setAttribute('autocomplete', 'off');
+  input.addEventListener('input', show);
+  input.addEventListener('focus', () => { if (mode === 'list') show(); });
+  input.addEventListener('blur', () => setTimeout(close, 120));
+  input.addEventListener('keydown', e => {
+    if (!box) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); active = (active + 1) % items.length; draw(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); active = (active - 1 + items.length) % items.length; draw(); }
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopImmediatePropagation(); pick(items[active]); }
+    else if (e.key === 'Escape') { e.stopPropagation(); close(); }
+  }, true);
+  return { close };
+}
+
+/** Nested tag tree: #inbox/to-read sits under #inbox. Parents that are not tags themselves still show. */
+function tagTree(tags) {
+  const root = { children: new Map() };
+  for (const t of tags) {
+    let node = root, path = '';
+    for (const part of t.name.split('/')) {
+      path = path ? path + '/' + part : part;
+      const k = part.toLowerCase();
+      if (!node.children.has(k)) node.children.set(k, { label: part, path, count: 0, total: 0, children: new Map() });
+      node = node.children.get(k);
+      node.total += t.count;
+    }
+    node.count = t.count; node.tag = t;
+  }
+  return root;
+}
+
+/** Note text without its YAML front matter (shown on cards). */
+const noteBody = text => (text || '').replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n?/, '').trim();
+
+/** Text with #tags turned into links (for notes on cards and in the drawer). */
+function linkifyTags(text) {
+  const out = []; let last = 0;
+  const re = /(^|[\s(\[,;])#([\p{L}\p{N}\p{M}_\-\/\p{Extended_Pictographic}\p{So}‍️]+)/gu;
+  for (const m of text.matchAll(re)) {
+    if (!/[^\d/]/u.test(m[2])) continue;
+    const start = m.index + m[1].length;
+    out.push(text.slice(last, start), h('a', { class: 'inline-tag', href: tagHref(m[2]), onclick: e => e.stopPropagation() }, '#' + m[2]));
+    last = start + 1 + m[2].length;
+  }
+  out.push(text.slice(last));
+  return out;
 }
 
 // ───────── data ─────────
@@ -327,11 +441,43 @@ function renderSidebar() {
     state.collections.map(c => nav(`#/c/${c.id}`, c.icon, c.name, c.count, r.kind === 'collection' && r.id === c.id)),
     state.collections.length ? null : h('div', { class: 'muted', style: { padding: '2px 10px', fontSize: '12px' } }, 'No collections yet'),
     h('div', { class: 'nav-section' }, 'Tags'),
-    h('div', { class: 'tag-cloud' }, state.tags.slice(0, 60).map(t =>
-      h('a', { class: 'chip', href: `#/t/${encodeURIComponent(t.name)}`, style: r.filter?.tag === t.name ? { background: 'var(--accent)', color: '#fff' } : null }, `#${t.name} `, h('span', { class: 'muted' }, t.count)))),
+    state.tags.length ? sidebarTags(r) : h('div', { class: 'muted', style: { padding: '2px 10px', fontSize: '12px' } }, 'Type #tag in a note to create one'),
     h('div', { class: 'grow' }),
     nav('#/settings', '⚙', 'Settings', null, r.kind === 'settings'),
   ].flat().filter(Boolean));
+}
+
+function sidebarTags(r) {
+  const open = new Set(store.get('openTags', []));
+  const current = (r.filter?.tag || '').toLowerCase();
+  const list = h('div', { class: 'tag-tree' });
+  const filter = h('input', { class: 'input tag-filter', placeholder: 'Filter tags…', value: state.tagFilter || '',
+    oninput: e => { state.tagFilter = e.target.value; draw(); } });
+  function node(n, depth) {
+    const kids = [...n.children.values()].sort((a, b) => b.total - a.total || a.label.localeCompare(b.label));
+    const isOpen = open.has(n.path.toLowerCase()) || current.startsWith(n.path.toLowerCase() + '/');
+    return [h('div', { class: 'tt-row' + (current === n.path.toLowerCase() ? ' active' : ''), style: { paddingLeft: (6 + depth * 14) + 'px' } },
+      kids.length ? h('button', { class: 'tt-toggle', title: isOpen ? 'Collapse' : 'Expand', onclick: () => {
+        const k = n.path.toLowerCase(); open.has(k) ? open.delete(k) : open.add(k); store.set('openTags', [...open]); draw(); } }, isOpen ? '▾' : '▸')
+        : h('span', { class: 'tt-toggle' }),
+      h('a', { href: tagHref(n.path), class: 'tt-name', onclick: () => $('.sidebar').classList.remove('open') }, '#' + n.label),
+      h('span', { class: 'count' }, kids.length && n.total !== n.count ? n.total : n.count)),
+      isOpen ? kids.map(k => node(k, depth + 1)) : null];
+  }
+  function draw() {
+    const q = (state.tagFilter || '').trim();
+    if (q) { // flat search results across all levels
+      const found = matchTags(q, []).concat(state.tags.filter(t => t.name.toLowerCase().includes(q.toLowerCase().replace(/^#/, '')))).filter((t, i, a) => a.indexOf(t) === i).slice(0, 30);
+      list.replaceChildren(...(found.length ? found.map(t => h('div', { class: 'tt-row' + (current === t.name.toLowerCase() ? ' active' : '') },
+        h('span', { class: 'tt-toggle' }), h('a', { href: tagHref(t.name), class: 'tt-name' }, '#' + t.name), h('span', { class: 'count' }, t.count)))
+        : [h('div', { class: 'muted', style: { padding: '4px 10px', fontSize: '12px' } }, 'No tags match')]));
+      return;
+    }
+    const kids = [...tagTree(state.tags).children.values()].sort((a, b) => b.total - a.total || a.label.localeCompare(b.label));
+    list.replaceChildren(...kids.flatMap(k => node(k, 0)).flat(Infinity).filter(Boolean));
+  }
+  draw();
+  return h('div', {}, state.tags.length > 6 ? filter : null, list);
 }
 
 function renderMain() {
@@ -340,8 +486,9 @@ function renderMain() {
   const theme = currentTheme();
   applyTheme(theme);
   if (state.themedRoute !== location.hash) { state.layout = theme.cards.layout; state.themedRoute = location.hash; }
-  const search = h('input', { class: 'input', placeholder: 'Search everything…  ( / )', value: state.q, id: 'q',
+  const search = h('input', { class: 'input', placeholder: 'Search… try #tag or tag:inbox  ( / )', value: state.q, id: 'q',
     oninput: debounce(async e => { state.q = e.target.value.trim(); if (!route().filter) location.hash = '#/'; await loadItems(); renderList(); }, 250) });
+  tagSuggest(search, { mode: 'search' });
   const topbar = h('div', { class: 'topbar' },
     h('button', { class: 'btn ghost menu-btn', onclick: () => $('.sidebar').classList.toggle('open') }, '☰'),
     h('div', { class: 'search' }, search),
@@ -374,6 +521,7 @@ function composer(r) {
   const ta = h('textarea', { placeholder: 'Paste a link, jot a note, or drop a file…  (Ctrl+Enter to save)', rows: 1,
     oninput: e => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; },
     onkeydown: e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save(); } });
+  tagSuggest(ta, { mode: 'hash' });
   const fileIn = h('input', { type: 'file', multiple: true, hidden: true, onchange: e => uploadFiles([...e.target.files]) });
   const ctx = () => ({ collectionId: r.kind === 'collection' ? r.id : undefined, tags: r.kind === 'tag' ? [r.filter.tag] : undefined });
   async function save() {
@@ -438,8 +586,9 @@ function card(b) {
       h('div', { class: 'site' }, b.favicon ? h('img', { src: b.favicon, alt: '', loading: 'lazy', onerror: e => e.target.remove() }) : h('span', {}, icon),
         b.site_name || host(b.url) || (b.type === 'note' ? 'Note' : 'File'), ' · ', ago(b.created_at)),
       h('div', { class: 'title' }, b.title || b.url || 'Untitled'),
-      (b.type === 'note' ? b.note : b.description) ? h('div', { class: 'desc' }, b.type === 'note' ? b.note : b.description) : null,
-      b.tags.length ? h('div', { class: 'tags' }, b.tags.map(t => h('span', { class: 'chip' + (t.source === 'ai' ? ' ai' : '') }, t.name))) : null),
+      (b.type === 'note' ? noteBody(b.note) : b.description) ? h('div', { class: 'desc' }, b.type === 'note' ? linkifyTags(noteBody(b.note)) : b.description) : null,
+      b.tags.length ? h('div', { class: 'tags' }, b.tags.map(t => h('a', { class: 'chip' + (t.source === 'ai' ? ' ai' : ''), href: tagHref(t.name),
+        title: t.source === 'note' ? 'From the note text' : t.source === 'ai' ? 'Added by AI' : null, onclick: e => e.stopPropagation() }, t.name))) : null),
     h('div', { class: 'actions' },
       b.url ? act('↗', 'Open', () => window.open(b.url, '_blank', 'noopener')) : null,
       act(b.favorite ? '★' : '☆', 'Favorite', () => patch(b.id, { favorite: !b.favorite })),
@@ -493,13 +642,19 @@ async function openDrawer(id) {
   const b = await api(`/bookmarks/${id}`);
   const title = h('input', { class: 'input', value: b.title || '' });
   const desc = h('textarea', { class: 'input', rows: 3 }, b.description || '');
-  const note = h('textarea', { class: 'input', rows: b.type === 'note' ? 10 : 4, placeholder: 'Your notes…' }, b.note || '');
-  let tags = b.tags.map(t => t.name);
+  const note = h('textarea', { class: 'input', rows: b.type === 'note' ? 10 : 4, placeholder: 'Your notes… type #tag to tag' }, b.note || '');
+  tagSuggest(note, { mode: 'hash' });
+  // Tags typed as #tag in the note are managed by the note text; the rest are edited here.
+  let tags = b.tags.filter(t => t.source !== 'note').map(t => t.name);
+  const noteTags = b.tags.filter(t => t.source === 'note').map(t => t.name);
   const tagWrap = h('div', { class: 'tag-input' });
-  const tagIn = h('input', { placeholder: 'Add tag…', list: 'tag-list', onkeydown: e => {
-    if ((e.key === 'Enter' || e.key === ',') && tagIn.value.trim()) { e.preventDefault(); tags.push(tagIn.value.trim().toLowerCase()); tagIn.value = ''; drawTags(); }
+  const addTag = v => { const t = v.trim().replace(/^#+/, '').replace(/\s+/g, '-'); if (t && !tags.some(x => x.toLowerCase() === t.toLowerCase())) tags.push(t); tagIn.value = ''; drawTags(); tagIn.focus(); };
+  const tagIn = h('input', { placeholder: 'Add tag…', onkeydown: e => {
+    if ((e.key === 'Enter' || e.key === ',' || e.key === ' ') && tagIn.value.trim()) { e.preventDefault(); addTag(tagIn.value); }
     else if (e.key === 'Backspace' && !tagIn.value && tags.length) { tags.pop(); drawTags(); } } });
-  const drawTags = () => tagWrap.replaceChildren(...tags.map((t, i) => h('span', { class: 'chip x', title: 'Remove', onclick: () => { tags.splice(i, 1); drawTags(); } }, t + ' ×')), tagIn);
+  tagSuggest(tagIn, { mode: 'list', onPick: addTag, exclude: () => tags });
+  const drawTags = () => tagWrap.replaceChildren(...tags.map((t, i) => h('span', { class: 'chip x', title: 'Remove', onclick: () => { tags.splice(i, 1); drawTags(); } }, t + ' ×')),
+    ...noteTags.map(t => h('span', { class: 'chip note-tag', title: 'From the note text — edit the note to change it' }, '#' + t)), tagIn);
   drawTags();
   const col = h('select', { class: 'input' }, h('option', { value: '' }, '— None —'),
     state.collections.map(c => h('option', { value: c.id, selected: c.id === b.collection_id }, `${c.icon} ${c.name}`)));
@@ -526,8 +681,7 @@ async function openDrawer(id) {
       h('div', { class: 'field' }, h('label', {}, 'Title'), title),
       b.type === 'link' ? h('div', { class: 'field' }, h('label', {}, 'Description'), desc) : null,
       h('div', { class: 'field' }, h('label', {}, b.type === 'note' ? 'Note' : 'Notes'), note),
-      h('div', { class: 'field' }, h('label', {}, 'Tags'), tagWrap,
-        h('datalist', { id: 'tag-list' }, state.tags.map(t => h('option', { value: t.name })))),
+      h('div', { class: 'field' }, h('label', {}, 'Tags'), tagWrap),
       h('div', { class: 'field' }, h('label', {}, 'Collection'), col),
       h('div', { class: 'muted', style: { fontSize: '12px' } },
         `Saved ${new Date(b.created_at * 1000).toLocaleString()}`, b.author ? ` · by ${b.author}` : '', b.word_count ? ` · ${b.word_count} words · ~${Math.max(1, Math.round(b.word_count / 230))} min read` : ''),
@@ -587,15 +741,17 @@ function editCollection(id) {
   } }, 'Delete'));
 }
 function renameTag(name) {
-  const t = state.tags.find(t => t.name === name); if (!t) return;
-  dialog('Rename tag (renaming to an existing tag merges them)', [{ label: 'Name', value: name }], async ([n]) => {
-    await api(`/tags/${t.id}`, { method: 'PATCH', body: { name: n } }); await loadMeta();
-    location.hash = `#/t/${encodeURIComponent(n.trim().toLowerCase())}`;
+  const t = state.tags.find(t => t.name.toLowerCase() === name.toLowerCase());
+  if (!t) return toast('This is a parent of nested tags; rename the nested tags instead');
+  dialog('Rename tag — nested tags move with it, and an existing name merges', [{ label: 'Name', value: t.name }], async ([n]) => {
+    const res = await api(`/tags/${t.id}`, { method: 'PATCH', body: { name: n } }); await loadMeta();
+    location.hash = tagHref(res.name);
   });
 }
 async function deleteTag(name) {
-  const t = state.tags.find(t => t.name === name);
-  if (!t || !confirm(`Remove tag #${name} from all items?`)) return;
+  const t = state.tags.find(t => t.name.toLowerCase() === name.toLowerCase());
+  if (!t) return toast('This is a parent of nested tags; delete the nested tags instead');
+  if (!confirm(`Remove tag #${name} from all items?`)) return;
   await api(`/tags/${t.id}`, { method: 'DELETE' }); location.hash = '#/';
 }
 
@@ -697,7 +853,8 @@ async function flushQueue() {
 
 function renderShare(share) {
   const title = h('input', { class: 'input', value: share.title, placeholder: share.url ? 'Fetched automatically if empty' : 'Title' });
-  const tags = h('input', { class: 'input', placeholder: 'reading, recipes', list: 'share-tags', autocapitalize: 'none' });
+  const tags = h('input', { class: 'input', placeholder: 'reading, recipes', autocapitalize: 'none' });
+  tagSuggest(tags, { mode: 'list' });
   const col = h('select', { class: 'input' }, h('option', { value: '' }, '— Unsorted —'),
     state.collections.map(c => h('option', { value: c.id }, `${c.icon} ${c.name}`)));
   const note = h('textarea', { class: 'input', rows: share.url ? 3 : 6, placeholder: share.url ? 'Why are you saving this?' : 'Note' }, share.note);
@@ -730,7 +887,7 @@ function renderShare(share) {
     h('div', { class: 'brand' }, h('img', { src: '/icon.svg', alt: '' }), share.url ? 'Save link' : 'Save note'),
     share.url ? h('div', { class: 'share-url' }, share.url) : null,
     h('div', { class: 'field' }, h('label', {}, 'Title'), title),
-    h('div', { class: 'field' }, h('label', {}, 'Tags'), tags, h('datalist', { id: 'share-tags' }, state.tags.map(t => h('option', { value: t.name })))),
+    h('div', { class: 'field' }, h('label', {}, 'Tags'), tags),
     h('div', { class: 'field' }, h('label', {}, 'Collection'), col),
     h('div', { class: 'field' }, h('label', {}, share.url ? 'Note' : 'Text'), note),
     h('label', { class: 'row' }, fav, ' ★ Favorite'),

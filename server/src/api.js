@@ -5,7 +5,7 @@ const multer = require('multer');
 const { parseHTML } = require('linkedom');
 const { db, DATA_DIR, reindex, tx } = require('./db');
 const auth = require('./auth');
-const { setTags, tagsFor, pruneOrphanTags } = require('./tags');
+const { setTags, syncNoteTags, tagsFor, pruneOrphanTags, cleanTag, tagKey, tagFilterSql } = require('./tags');
 const { enqueue } = require('./worker');
 const { aiEnabled } = require('./ai');
 const { sanitizeTheme } = require('./theme');
@@ -118,6 +118,13 @@ function withTags(rows) {
   return rows.map(r => ({ ...r, tags: map[r.id] || [] }));
 }
 
+/** Split a search into tag filters (tag:#x, tag:x, #x) and free text. */
+function parseSearch(q) {
+  const tags = [];
+  const text = q.replace(/(^|\s)(?:tag:#?|#)([^\s#"]+)/giu, (m, pre, t) => { if (cleanTag(t)) { tags.push(cleanTag(t)); return pre; } return m; });
+  return { tags, text: text.trim() };
+}
+
 function ftsQuery(q) {
   const terms = q.match(/"[^"]+"|\S+/g) || [];
   return terms.map(t => t.startsWith('"') ? t : `"${t.replace(/"/g, '')}"*`).join(' AND ');
@@ -131,14 +138,15 @@ api.get('/bookmarks', (req, res) => {
   let from = 'bookmarks b';
   let order = 'b.created_at DESC, b.id DESC';
 
-  if (q && q.trim()) {
+  const search = parseSearch(String(q || ''));
+  if (search.text) {
     from = 'bookmarks_fts f JOIN bookmarks b ON b.id = f.rowid';
-    where.push('bookmarks_fts MATCH ?'); args.push(ftsQuery(q.trim()));
+    where.push('bookmarks_fts MATCH ?'); args.push(ftsQuery(search.text));
     if (!sort) order = 'bm25(bookmarks_fts, 10, 5, 4, 1, 3, 6)';
   }
-  if (tag) {
-    where.push('b.id IN (SELECT bt.bookmark_id FROM bookmark_tags bt JOIN tags t ON t.id = bt.tag_id WHERE t.user_id = ? AND t.name = ?)');
-    args.push(req.userId, tag);
+  // Every tag filter must match; each also matches nested children (tag:inbox → inbox/to-read)
+  for (const t of [...search.tags, ...(tag ? [tag] : [])]) {
+    const f = tagFilterSql(req.userId, t); where.push(f.sql); args.push(...f.args);
   }
   if (collection === 'none') where.push('b.collection_id IS NULL');
   else if (collection) { where.push('b.collection_id = ?'); args.push(int(collection)); }
@@ -179,6 +187,7 @@ function createBookmark(userId, body) {
       int(body.collectionId), body.favorite ? 1 : 0, type === 'link' ? 'pending' : 'ready', int(body.createdAt));
     const id = Number(r.lastInsertRowid);
     if (body.tags?.length) setTags(userId, id, body.tags);
+    if (body.note) syncNoteTags(userId, id, body.note);
     reindex(id);
     return { id, duplicate: false };
   });
@@ -201,6 +210,7 @@ api.post('/bookmarks/upload', upload.single('file'), (req, res) => {
     req.body.note || null, req.file.filename + '|' + req.file.originalname, req.file.mimetype, req.file.size, int(req.body.collectionId));
   const id = Number(r.lastInsertRowid);
   if (req.body.tags) setTags(req.userId, id, String(req.body.tags).split(','));
+  if (req.body.note) syncNoteTags(req.userId, id, req.body.note);
   reindex(id); enqueue(id);
   res.status(201).json({ id });
 });
@@ -232,7 +242,9 @@ api.patch('/bookmarks/:id', (req, res) => {
   }
   tx(() => {
     if (sets.length) db.prepare(`UPDATE bookmarks SET ${sets.join(', ')}, updated_at = unixepoch() WHERE id = ?`).run(...args, b.id);
-    if (Array.isArray(req.body.tags)) { setTags(req.userId, b.id, req.body.tags); pruneOrphanTags(req.userId); }
+    if (Array.isArray(req.body.tags)) setTags(req.userId, b.id, req.body.tags);
+    if ('note' in req.body) syncNoteTags(req.userId, b.id, req.body.note || '');
+    if (Array.isArray(req.body.tags) || 'note' in req.body) pruneOrphanTags(req.userId);
     reindex(b.id);
   });
   const row = db.prepare(`SELECT ${LIST_COLS} FROM bookmarks b WHERE id = ?`).get(b.id);
@@ -306,24 +318,47 @@ api.get('/bookmarks/:id/file', (req, res) => {
 
 // ───────────────────────── Tags ─────────────────────────
 api.get('/tags', (req, res) => {
-  res.json(db.prepare(`SELECT t.id, t.name, COUNT(bt.bookmark_id) AS count FROM tags t
-    LEFT JOIN bookmark_tags bt ON bt.tag_id = t.id WHERE t.user_id = ? GROUP BY t.id ORDER BY count DESC, t.name`).all(req.userId));
+  res.json(db.prepare(`SELECT t.id, t.name, t.key, COUNT(bt.bookmark_id) AS count FROM tags t
+    LEFT JOIN bookmark_tags bt ON bt.tag_id = t.id WHERE t.user_id = ? GROUP BY t.id ORDER BY count DESC, t.key`).all(req.userId));
 });
+
+/** Rename one tag; if the new name already exists (any casing) the two are merged. */
+function renameOne(userId, t, newName) {
+  const key = tagKey(newName);
+  const target = db.prepare('SELECT * FROM tags WHERE user_id = ? AND key = ?').get(userId, key);
+  if (target && target.id !== t.id) {
+    db.prepare('INSERT OR IGNORE INTO bookmark_tags (bookmark_id, tag_id, source) SELECT bookmark_id, ?, source FROM bookmark_tags WHERE tag_id = ?').run(target.id, t.id);
+    db.prepare('DELETE FROM tags WHERE id = ?').run(t.id);
+  } else db.prepare('UPDATE tags SET name = ?, key = ? WHERE id = ?').run(newName, key, t.id);
+}
+
+// Renaming #inbox to #todo also renames nested tags (#inbox/x → #todo/x).
 api.patch('/tags/:id', (req, res) => {
-  const name = String(req.body?.name || '').trim().toLowerCase();
-  if (!name) return bad(res, 'Name required');
+  const name = cleanTag(req.body?.name);
+  if (!name) return bad(res, 'Invalid tag: use letters, numbers, _ - / or emoji, with at least one non-number');
   const t = db.prepare('SELECT * FROM tags WHERE id = ? AND user_id = ?').get(int(req.params.id), req.userId);
   if (!t) return bad(res, 'Not found', 404);
-  const target = db.prepare('SELECT * FROM tags WHERE user_id = ? AND name = ?').get(req.userId, name);
-  const affected = db.prepare('SELECT bookmark_id FROM bookmark_tags WHERE tag_id = ?').all(t.id).map(r => r.bookmark_id);
+  const children = db.prepare('SELECT * FROM tags WHERE user_id = ? AND substr(key, 1, ?) = ?').all(req.userId, t.key.length + 1, t.key + '/');
+  const ids = [t, ...children].map(x => x.id);
+  const affected = db.prepare(`SELECT DISTINCT bookmark_id FROM bookmark_tags WHERE tag_id IN (${ids.map(() => '?').join(',')})`).all(...ids).map(r => r.bookmark_id);
   tx(() => {
-    if (target && target.id !== t.id) { // merge
-      db.prepare('INSERT OR IGNORE INTO bookmark_tags (bookmark_id, tag_id, source) SELECT bookmark_id, ?, source FROM bookmark_tags WHERE tag_id = ?').run(target.id, t.id);
-      db.prepare('DELETE FROM tags WHERE id = ?').run(t.id);
-    } else db.prepare('UPDATE tags SET name = ? WHERE id = ?').run(name, t.id);
+    renameOne(req.userId, t, name);
+    for (const c of children) renameOne(req.userId, c, name + c.name.slice(t.name.length));
+    // Rewrite #old and #old/child in note text (and YAML tag lists) so notes keep matching their tags
+    const esc = t.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const inline = new RegExp(`(^|[\\s(\\[,;])#${esc}(?=/|[^\\p{L}\\p{N}\\p{M}_\\-]|$)`, 'giu');
+    const yaml = new RegExp(`^([ \\t]*-[ \\t]*["']?)${esc}(?=/|["']?[ \\t]*$)`, 'gimu');
+    const upd = db.prepare('UPDATE bookmarks SET note = ? WHERE id = ?');
+    for (const id of affected) {
+      const note = db.prepare('SELECT note FROM bookmarks WHERE id = ?').get(id)?.note;
+      if (!note) continue;
+      let next = note.replace(inline, `$1#${name}`);
+      next = next.replace(/^---\r?\n[\s\S]*?\r?\n---/, fm => fm.replace(yaml, `$1${name}`));
+      if (next !== note) upd.run(next, id);
+    }
     affected.forEach(reindex);
   });
-  res.json({ ok: true });
+  res.json({ ok: true, name });
 });
 api.delete('/tags/:id', (req, res) => {
   const t = db.prepare('SELECT * FROM tags WHERE id = ? AND user_id = ?').get(int(req.params.id), req.userId);

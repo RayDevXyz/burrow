@@ -1,6 +1,6 @@
 // Burrow service worker: makes the web app installable (and a share target on Android)
 // and keeps the app shell available offline. API calls always go to the network.
-const CACHE = 'burrow-shell-v3';
+const CACHE = 'burrow-shell-v4';
 const SHELL = ['/', '/app.js', '/styles.css', '/icon.svg', '/manifest.webmanifest', '/icons/192.png'];
 
 self.addEventListener('install', e => {
