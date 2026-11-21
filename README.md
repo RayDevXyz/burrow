@@ -26,6 +26,12 @@ burrow/
   - **Nested tags**: `#inbox/to-read` shows under `#inbox` in the sidebar, and `tag:inbox` also matches its nested tags.
   - **Format**: letters, numbers, `_`, `-`, `/` and emoji; no spaces; at least one non-number (`#1984` isn't a tag, `#y1984` is). Tags are case-insensitive and keep the casing they were first created with.
   - Click any tag to see everything with it. **Rename** moves nested tags along, merges with an existing tag of the same name, and updates the `#tags` in your notes.
+- **Databases like Notion**: Home and every collection work like a Notion database.
+  - **Views**: Table, Board (kanban), List and Gallery. Each view has its own filters (and/or), sorts, grouping and visible properties. Add views with **+ Add view** under the page header.
+  - **Dashboard**: switch a page from *Tabs* to *Dashboard* to show all its views stacked, each filtered its own way.
+  - **Properties** (page header → **⚙ Properties**): properties made on Home apply to every bookmark; collections can add extra ones. Types: Text (with **bold**/*italic*/`code`/links), Number (plain, commas, percent, currency or progress bar), Select, Status (To-do / In progress / Complete), Multi-select, Date (ranges, optional time), Formula, Relation, Files & media, Checkbox, URL, Created time, Button (runs actions like "set Status to Done") and ID (with a prefix).
+  - Edit values in table cells, by dragging board cards between columns, or in the item panel. Group and filter by any property.
+  - **Formulas**: a safe formula language similar to Notion's, e.g. `prop("Price") * 1.21`, `if(prop("Done"), "✅", "⏳")`, `dateBetween(prop("Due"), today(), "days")`, `prop("Title").upper()`.
 - **Collections**, **favorites**, **archive**, **bulk actions** (tag, move, archive, delete).
 - Optional **AI auto-tagging** with Claude or a local Ollama model. AI tags show as `✦ tag`.
 - **Import** Netscape bookmark HTML from Chrome, Firefox, Pocket, Raindrop, Linkwarden or Hoarder; folders become collections. Also imports Burrow JSON.

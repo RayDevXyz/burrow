@@ -111,6 +111,56 @@ if (!db.prepare('PRAGMA table_info(tags)').all().some(c => c.name === 'key')) {
 }
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_key ON tags(user_id, key)');
 
+// Notion-style databases: custom properties, their values, and saved views per page
+db.exec(`
+CREATE TABLE IF NOT EXISTS properties (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  collection_id INTEGER REFERENCES collections(id) ON DELETE CASCADE,  -- NULL = on every page
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  config TEXT NOT NULL DEFAULT '{}',
+  position INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS prop_values (
+  bookmark_id INTEGER NOT NULL REFERENCES bookmarks(id) ON DELETE CASCADE,
+  prop_id INTEGER NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  value TEXT NOT NULL,
+  PRIMARY KEY (bookmark_id, prop_id)
+);
+CREATE TABLE IF NOT EXISTS views (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  page TEXT NOT NULL,                         -- 'home' or 'c:<collection id>'
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,                         -- table | kanban | list | grid
+  config TEXT NOT NULL DEFAULT '{}',
+  position INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS page_settings (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  page TEXT NOT NULL,
+  settings TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (user_id, page)
+);
+`);
+
+/** Searchable text from custom property values (text, URL, select options). */
+function propText(id) {
+  const rows = db.prepare(`SELECT p.type, p.config, v.value FROM prop_values v JOIN properties p ON p.id = v.prop_id
+    WHERE v.bookmark_id = ? AND p.type IN ('text','url','select','multi_select','status')`).all(id);
+  const out = [];
+  for (const r of rows) {
+    const v = JSON.parse(r.value);
+    if (r.type === 'text' || r.type === 'url') out.push(String(v));
+    else {
+      const opts = JSON.parse(r.config).options || [];
+      for (const oid of [].concat(v)) { const o = opts.find(o => o.id === oid); if (o) out.push(o.name); }
+    }
+  }
+  return out.join(' ');
+}
+
 /** Rebuild the full-text row for one bookmark. */
 function reindex(id) {
   const b = db.prepare('SELECT * FROM bookmarks WHERE id = ?').get(id);
@@ -121,7 +171,7 @@ function reindex(id) {
   ).all(id).map(r => r.name).join(' ');
   db.prepare(
     'INSERT INTO bookmarks_fts (rowid, title, description, note, content_text, url, tags) VALUES (?,?,?,?,?,?,?)'
-  ).run(id, b.title || '', b.description || '', b.note || '', b.content_text || '', b.url || b.file_name || '', tags);
+  ).run(id, b.title || '', b.description || '', [b.note || '', propText(id)].join(' '), b.content_text || '', b.url || b.file_name || '', tags);
 }
 
 function tx(fn) {

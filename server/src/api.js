@@ -10,6 +10,7 @@ const { enqueue } = require('./worker');
 const { aiEnabled } = require('./ai');
 const { sanitizeTheme } = require('./theme');
 const crypto = require('crypto');
+const database = require('./database');
 
 const api = express.Router();
 const upload = multer({ dest: path.join(DATA_DIR, 'uploads'), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -52,6 +53,7 @@ api.post('/auth/logout', (req, res) => {
 
 // Everything below requires a session cookie or API token
 api.use(auth.requireAuth);
+api.use(database.router);
 
 api.get('/me', (req, res) => {
   const u = db.prepare('SELECT id, username, created_at, theme FROM users WHERE id = ?').get(req.userId);
@@ -114,8 +116,10 @@ const LIST_COLS = `b.id, b.type, b.url, b.title, b.description, b.note, b.image_
   b.status, b.error, b.created_at, b.updated_at, (b.content_html IS NOT NULL) AS has_reader`;
 
 function withTags(rows) {
-  const map = tagsFor(rows.map(r => r.id));
-  return rows.map(r => ({ ...r, tags: map[r.id] || [] }));
+  const ids = rows.map(r => r.id);
+  const map = tagsFor(ids);
+  const props = database.propsFor(ids);
+  return rows.map(r => ({ ...r, tags: map[r.id] || [], props: props[r.id] || {} }));
 }
 
 /** Split a search into tag filters (tag:#x, tag:x, #x) and free text. */
@@ -132,7 +136,8 @@ function ftsQuery(q) {
 
 api.get('/bookmarks', (req, res) => {
   const { q, tag, collection, favorite, archived, type, sort } = req.query;
-  const limit = Math.min(int(req.query.limit) || 50, 200);
+  // full=1: database views load a whole page at once and filter/sort/group in the browser
+  const limit = req.query.full === '1' ? 5000 : Math.min(int(req.query.limit) || 50, 200);
   const offset = int(req.query.offset) || 0;
   const where = ['b.user_id = ?']; const args = [req.userId];
   let from = 'bookmarks b';
@@ -196,6 +201,7 @@ function createBookmark(userId, body) {
 api.post('/bookmarks', (req, res) => {
   try {
     const { id, duplicate } = createBookmark(req.userId, req.body || {});
+    if (!duplicate && req.body.props) { try { tx(() => database.setProps(req.userId, id, req.body.props)); reindex(id); } catch (e) { return bad(res, e.message, e.status || 400); } }
     if (duplicate && req.body.tags?.length) { setTags(req.userId, id, req.body.tags, { replace: false }); reindex(id); }
     if (!duplicate) enqueue(id);
     const row = db.prepare(`SELECT ${LIST_COLS} FROM bookmarks b WHERE id = ?`).get(id);
@@ -240,8 +246,10 @@ api.patch('/bookmarks/:id', (req, res) => {
       sets.push(`${col} = ?`); args.push(v);
     }
   }
+  try { if (req.body.props) tx(() => database.setProps(req.userId, b.id, req.body.props)); }
+  catch (e) { return bad(res, e.message, e.status || 400); }
   tx(() => {
-    if (sets.length) db.prepare(`UPDATE bookmarks SET ${sets.join(', ')}, updated_at = unixepoch() WHERE id = ?`).run(...args, b.id);
+    if (sets.length || req.body.props) db.prepare(`UPDATE bookmarks SET ${sets.length ? sets.join(', ') + ',' : ''} updated_at = unixepoch() WHERE id = ?`).run(...args, b.id);
     if (Array.isArray(req.body.tags)) setTags(req.userId, b.id, req.body.tags);
     if ('note' in req.body) syncNoteTags(req.userId, b.id, req.body.note || '');
     if (Array.isArray(req.body.tags) || 'note' in req.body) pruneOrphanTags(req.userId);
@@ -393,6 +401,8 @@ api.patch('/collections/:id', (req, res) => {
   res.json({ ok: true });
 });
 api.delete('/collections/:id', (req, res) => {
+  db.prepare('DELETE FROM views WHERE user_id = ? AND page = ?').run(req.userId, 'c:' + int(req.params.id));
+  db.prepare('DELETE FROM page_settings WHERE user_id = ? AND page = ?').run(req.userId, 'c:' + int(req.params.id));
   db.prepare('DELETE FROM collections WHERE id = ? AND user_id = ?').run(int(req.params.id), req.userId);
   res.json({ ok: true });
 });

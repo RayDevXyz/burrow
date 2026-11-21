@@ -10,7 +10,7 @@ function h(tag, attrs = {}, ...kids) {
     if (v == null || v === false) continue;
     if (k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(), v);
     else if (k === 'class') el.className = v;
-    else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+    else if (k === 'style' && typeof v === 'object') for (const [sk, sv] of Object.entries(v)) { if (sv == null) continue; sk.startsWith('--') ? el.style.setProperty(sk, sv) : (el.style[sk] = sv); }
     else if (k in el && typeof v !== 'string') el[k] = v;
     else el.setAttribute(k, v === true ? '' : v);
   }
@@ -365,8 +365,13 @@ async function loadMeta() {
   const [collections, tags, stats] = await Promise.all([api('/collections'), api('/tags'), api('/stats')]);
   Object.assign(state, { collections, tags, stats });
 }
+// Home and collections are databases with views (db.js); other pages use the simple card list.
+const isDbPage = r => r.kind === 'all' || r.kind === 'collection';
+const pageKey = r => (r.kind === 'collection' ? 'c:' + r.id : 'home');
+const dbReload = () => $('#db')?._db?.reload();
 async function loadItems(append = false) {
   const r = route(); if (!r.filter) return;
+  if (isDbPage(r)) { state.items = []; state.hasMore = false; return; }
   const params = new URLSearchParams({ ...r.filter, limit: 48, offset: append ? state.items.length : 0 });
   if (state.q) params.set('q', state.q);
   if (state.sort) params.set('sort', state.sort);
@@ -487,12 +492,16 @@ function renderMain() {
   applyTheme(theme);
   if (state.themedRoute !== location.hash) { state.layout = theme.cards.layout; state.themedRoute = location.hash; }
   const search = h('input', { class: 'input', placeholder: 'Search… try #tag or tag:inbox  ( / )', value: state.q, id: 'q',
-    oninput: debounce(async e => { state.q = e.target.value.trim(); if (!route().filter) location.hash = '#/'; await loadItems(); renderList(); }, 250) });
+    oninput: debounce(async e => {
+      state.q = e.target.value.trim(); if (!route().filter) location.hash = '#/';
+      if (isDbPage(route())) { const box = $('#db'); if (box) window.BurrowDB.render(box, pageKey(route()), { q: state.q }); return; }
+      await loadItems(); renderList();
+    }, 250) });
   tagSuggest(search, { mode: 'search' });
   const topbar = h('div', { class: 'topbar' },
     h('button', { class: 'btn ghost menu-btn', onclick: () => $('.sidebar').classList.toggle('open') }, '☰'),
     h('div', { class: 'search' }, search),
-    r.filter ? [
+    r.filter && !isDbPage(r) ? [
       h('select', { class: 'input', style: { width: 'auto' }, onchange: async e => { state.sort = e.target.value; store.set('sort', state.sort); await loadItems(); renderList(); } },
         [['', state.q ? 'Relevance' : 'Newest'], ['oldest', 'Oldest'], ['title', 'Title']].map(([v, l]) => h('option', { value: v, selected: state.sort === v }, l))),
       h('button', { class: 'btn', title: 'Toggle layout', onclick: e => { state.layout = state.layout === 'grid' ? 'list' : 'grid'; e.currentTarget.textContent = state.layout === 'grid' ? '☰' : '▦'; renderList(); } }, state.layout === 'grid' ? '☰' : '▦'),
@@ -505,6 +514,8 @@ function renderMain() {
 
   const actions = () => [
     h('button', { class: 'btn small', title: r.kind === 'collection' ? 'Theme for this collection' : 'Global theme', onclick: openThemeEditor }, '🎨 Theme'),
+    isDbPage(r) ? h('button', { class: 'btn small', title: r.kind === 'collection' ? 'Extra properties for this collection' : 'Properties for every bookmark',
+      onclick: () => window.BurrowDB.openPropertiesEditor(pageKey(r), dbReload) }, '⚙ Properties') : null,
     r.kind === 'collection' ? h('button', { class: 'btn small', onclick: () => editCollection(r.id) }, 'Edit') : null,
     r.kind === 'tag' ? [
       h('button', { class: 'btn small', onclick: () => renameTag(r.filter.tag) }, 'Rename'),
@@ -513,6 +524,12 @@ function renderMain() {
   headerFor = (rr, t) => pageHeader(rr, t, actions());
   content.append(headerFor(r, theme));
   if (['all', 'collection', 'unsorted', 'notes', 'tag'].includes(r.kind)) content.append(composer(r));
+  if (isDbPage(r)) {
+    const box = h('div', { id: 'db' });
+    content.append(box);
+    window.BurrowDB.render(box, pageKey(r), { q: state.q });
+    return;
+  }
   content.append(h('div', { id: 'list' }));
   renderList();
 }
@@ -625,14 +642,17 @@ async function patch(id, body) {
     const stillHere = !(('archived' in body) && (r.kind === 'archive' ? !upd.archived : upd.archived)) &&
       !(r.kind === 'favorites' && !upd.favorite);
     if (i >= 0) stillHere ? (state.items[i] = upd) : state.items.splice(i, 1);
-    renderList(); loadMeta().then(renderSidebar);
+    if (isDbPage(r)) dbReload(); else renderList();
+    loadMeta().then(renderSidebar);
     return upd;
   } catch (e) { toast(e.message); }
 }
 async function del(id) {
   if (!confirm('Delete this item permanently?')) return;
   await api(`/bookmarks/${id}`, { method: 'DELETE' });
-  state.items = state.items.filter(x => x.id !== id); closeDrawer(); renderList(); loadMeta().then(renderSidebar);
+  state.items = state.items.filter(x => x.id !== id); closeDrawer();
+  if (isDbPage(route())) dbReload(); else renderList();
+  loadMeta().then(renderSidebar);
 }
 
 // ───────── detail drawer ─────────
@@ -663,6 +683,9 @@ async function openDrawer(id) {
     await patch(id, { title: title.value, description: desc.value, note: note.value, tags, collectionId: col.value || null });
     toast('Saved'); closeDrawer();
   };
+  // Custom properties (Notion-style) — edited in place, saved immediately
+  const propsSlot = h('div');
+  window.BurrowDB.drawerSection(b, () => { if (isDbPage(route())) dbReload(); }).then(el => propsSlot.replaceWith(el));
   const hero = b.type === 'file' && /^image\//.test(b.file_mime) ? `/api/bookmarks/${id}/file` : b.image_url;
   const drawer = h('div', { class: 'drawer', onkeydown: e => { if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save(); } } },
     h('header', {}, h('b', { class: 'grow' }, { link: 'Bookmark', note: 'Note', file: 'File' }[b.type]),
@@ -683,6 +706,7 @@ async function openDrawer(id) {
       h('div', { class: 'field' }, h('label', {}, b.type === 'note' ? 'Note' : 'Notes'), note),
       h('div', { class: 'field' }, h('label', {}, 'Tags'), tagWrap),
       h('div', { class: 'field' }, h('label', {}, 'Collection'), col),
+      propsSlot,
       h('div', { class: 'muted', style: { fontSize: '12px' } },
         `Saved ${new Date(b.created_at * 1000).toLocaleString()}`, b.author ? ` · by ${b.author}` : '', b.word_count ? ` · ${b.word_count} words · ~${Math.max(1, Math.round(b.word_count / 230))} min read` : ''),
       h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: save }, 'Save'),
@@ -900,6 +924,12 @@ function renderShare(share) {
 // "Install app" button (Android/desktop Chrome) — appears in Settings when installable.
 let installPrompt = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; });
+
+// Helpers shared with db.js (Notion-style database views)
+window.Burrow = {
+  h, $, api, toast, state, store, host, ago, debounce, cssUrl, tagHref, linkifyTags, noteBody, card, openDrawer, currentTheme, tagSuggest,
+  refreshMeta: () => loadMeta().then(renderSidebar), onItemsChanged: () => dbReload(),
+};
 
 // ───────── boot ─────────
 async function boot() {
