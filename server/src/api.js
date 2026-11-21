@@ -53,6 +53,7 @@ api.post('/auth/logout', (req, res) => {
 
 // Everything below requires a session cookie or API token
 api.use(auth.requireAuth);
+api.use('/integrations/brainwaves', require('./brainwaves'));
 api.use(database.router);
 
 api.get('/me', (req, res) => {

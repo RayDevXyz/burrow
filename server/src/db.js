@@ -143,6 +143,13 @@ CREATE TABLE IF NOT EXISTS page_settings (
   settings TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (user_id, page)
 );
+-- Other apps a user connects (BrainWaves: its address and token).
+CREATE TABLE IF NOT EXISTS integrations (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  value TEXT NOT NULL,
+  PRIMARY KEY (user_id, kind)
+);
 `);
 
 /** Searchable text from custom property values (text, URL, select options). */

@@ -121,6 +121,16 @@ burrow.example.com {
 }
 ```
 
+## BrainWaves
+
+Burrow works with [BrainWaves](https://github.com/RayDevXyz/nmuch), a self-hosted notes app:
+
+- **In BrainWaves** (connect Burrow in its 🦫 Burrow panel with a Burrow API token): browse and search your bookmarks, drag them into pages or onto a canvas, type `/burrow` to insert a bookmark card, and **Save to Burrow** a page (as a note) or the links in it. A BrainWaves `#tag` page also lists the Burrow bookmarks with that tag.
+- **In Burrow** (Settings → 🧠 BrainWaves, with a BrainWaves API token from its Settings → Account and API tokens): tag pages show the BrainWaves pages with the same tag.
+- `#/b/<id>` opens a bookmark directly (BrainWaves' "In Burrow" button uses it).
+
+Burrow's server calls BrainWaves with the token, so it never reaches the browser.
+
 ## Install the extension
 
 1. Open `chrome://extensions` and turn on **Developer mode**.

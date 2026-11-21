@@ -246,6 +246,8 @@ function route() {
     }
     case 'spaces': return { kind: 'spaces', title: 'Tab spaces', icon: '🗂' };
     case 'settings': return { kind: 'settings', title: 'Settings', icon: '⚙' };
+    // #/b/<id>: Home with that bookmark open (links from BrainWaves and elsewhere).
+    case 'b': return { kind: 'all', title: 'Home', icon: '🏠', filter: {}, open: +p[1] || null };
     default: return { kind: 'all', title: 'Home', icon: '🏠', filter: {} };
   }
 }
@@ -523,6 +525,7 @@ function renderMain() {
     ] : null];
   headerFor = (rr, t) => pageHeader(rr, t, actions());
   content.append(headerFor(r, theme));
+  if (r.kind === 'tag') content.append(brainwavesStrip(r.filter.tag));
   if (['all', 'collection', 'unsorted', 'notes', 'tag'].includes(r.kind)) content.append(composer(r));
   if (isDbPage(r)) {
     const box = h('div', { id: 'db' });
@@ -833,6 +836,7 @@ async function renderSettings(el) {
       tokens.length ? h('table', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Created'), h('th', {}, 'Last used'), h('th')),
         tokens.map(t => h('tr', {}, h('td', {}, t.name), h('td', {}, ago(t.created_at)), h('td', {}, t.last_used_at ? ago(t.last_used_at) : 'never'),
           h('td', {}, h('button', { class: 'btn small danger', onclick: async () => { await api(`/tokens/${t.id}`, { method: 'DELETE' }); location.reload(); } }, 'Revoke'))))) : null),
+    brainwavesSettings(),
     h('section', { class: 'panel' }, h('h3', {}, 'Import'),
       h('p', { class: 'muted' }, 'Netscape bookmark HTML (exported from Chrome, Firefox, Pocket, Raindrop, Linkwarden, Hoarder…) or a Burrow JSON export. Folders become collections.'),
       (() => {
@@ -848,6 +852,42 @@ async function renderSettings(el) {
     h('section', { class: 'panel' }, h('h3', {}, 'Export'),
       h('div', { class: 'row' }, h('a', { class: 'btn', href: '/api/export' }, '⬇ JSON (everything)'), h('a', { class: 'btn', href: '/api/export?format=html' }, '⬇ Bookmarks HTML'))),
   );
+}
+
+// ───────── BrainWaves (the notes app): its pages on tag pages ─────────
+/** On a tag page: the BrainWaves pages with the same tag. Empty when BrainWaves isn't connected. */
+function brainwavesStrip(tag) {
+  const box = h('div', { class: 'bw-strip', hidden: true });
+  api(`/integrations/brainwaves/tag/${encodeURIComponent(tag)}`).then(r => {
+    if (!r || !r.pages.length) return;
+    box.hidden = false;
+    box.replaceChildren(h('span', { class: 'bw-strip-label' }, '🧠 In BrainWaves'),
+      ...r.pages.map(p => h('a', { class: 'bw-page', href: p.link, target: '_blank', rel: 'noopener' }, (p.icon ? p.icon + ' ' : '📄 ') + p.title)));
+  }).catch(e => { box.hidden = false; box.replaceChildren(h('span', { class: 'bw-strip-label muted' }, '🧠 BrainWaves: ' + e.message)); });
+  return box;
+}
+
+function brainwavesSettings() {
+  const body = h('div');
+  const draw = async () => {
+    const c = await api('/integrations/brainwaves').catch(() => null);
+    if (c) {
+      body.replaceChildren(h('p', {}, 'Connected to ', h('a', { href: c.url, target: '_blank', rel: 'noopener' }, c.url), '. Tag pages show your BrainWaves pages with the same tag.'),
+        h('div', { class: 'row' }, h('button', { class: 'btn', onclick: async () => { await api('/integrations/brainwaves', { method: 'DELETE' }); draw(); } }, 'Disconnect')));
+      return;
+    }
+    const url = h('input', { class: 'input', placeholder: 'https://notes.example.com' });
+    const token = h('input', { class: 'input', type: 'password', placeholder: 'API token from BrainWaves' });
+    body.replaceChildren(
+      h('p', { class: 'muted' }, 'Show your BrainWaves pages on tag pages here. In BrainWaves, open Settings → Account and API tokens → New token, then paste its address and the token.'),
+      h('div', { class: 'row', style: { flexWrap: 'wrap' } }, url, token,
+        h('button', { class: 'btn primary', onclick: async () => {
+          try { await api('/integrations/brainwaves', { method: 'PUT', body: { url: url.value, token: token.value } }); toast('BrainWaves connected'); draw(); }
+          catch (e) { toast(e.message); }
+        } }, 'Connect')));
+  };
+  draw();
+  return h('section', { class: 'panel' }, h('h3', {}, '🧠 BrainWaves'), body);
 }
 
 // ───────── share target (Android share sheet → /share?title=&text=&url=) ─────────
@@ -946,12 +986,16 @@ async function boot() {
   const share = sharedPayload();
   if (share) return renderShare(share);
   render(); await loadItems(); renderList();
+  openLinked();
 }
+/** A #/b/<id> link opens that bookmark. */
+function openLinked() { const id = route().open; if (id) openDrawer(id); }
 window.addEventListener('online', () => { if (state.me) flushQueue().then(() => refresh()); });
 window.addEventListener('hashchange', async () => {
   if (!state.me) return;
   state.selected.clear(); closeDrawer();
   renderSidebar(); renderMain(); await loadItems(); renderList();
+  openLinked();
 });
 document.addEventListener('keydown', e => {
   if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); $('#q')?.focus(); }
