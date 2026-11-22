@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Burrow — Bookmarks & Tab Spaces",
   "short_name": "Burrow",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Save pages to your self-hosted Burrow server and organize tabs into workspaces and stacks.",
   "permissions": [
     "tabs",
@@ -11,7 +11,8 @@
     "sidePanel",
     "contextMenus",
     "alarms",
-    "favicon"
+    "favicon",
+    "search"
   ],
   "background": {
     "service_worker": "background.js",
@@ -63,5 +64,8 @@
   "optional_host_permissions": [
     "https://*/*",
     "http://*/*"
-  ]
+  ],
+  "chrome_url_overrides": {
+    "newtab": "newtab.html"
+  }
 }

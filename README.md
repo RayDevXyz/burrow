@@ -59,6 +59,12 @@ burrow/
     - Drag a tab onto a stack, or choose "Stash into…" to add to an existing one.
     - Restore all or single tabs, keep the stack after restoring, or convert it into a workspace.
   - **Search** across open tabs, workspaces, stacks *and* your Burrow bookmarks.
+- **New Tab / startup page**:
+  - A clock with a greeting.
+  - One search box that finds your Burrow bookmarks and open tabs as you type, and searches the web with your default search engine on Enter.
+  - Favorites as quick-link tiles, recently saved bookmarks, and your workspaces and stacks with one-click **Switch here**, **New window** and **Restore** buttons.
+  - It uses your Burrow global theme (accent, light/dark, background image or gradient). Choose what to show with ⚙ on the page.
+  - To see it when Chrome starts, set **Settings → On startup → Open the New Tab page**.
 - Right-click menu: save page, link or selection (as a note); stash tab or window.
 - Shortcuts: `Alt+Shift+S` open popup, `Alt+Shift+B` instant save. A toolbar badge shows ✓ on pages you've already saved.
 - Workspaces and stacks are **synced to your server** using last-write-wins per space, so they follow you between computers.

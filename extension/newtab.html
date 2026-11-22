@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>New Tab</title>
+  <link rel="icon" href="icons/32.png">
+  <link rel="stylesheet" href="ui.css">
+  <link rel="stylesheet" href="newtab.css">
+</head>
+<body>
+  <div id="bg"><div class="img"></div><div class="dim"></div></div>
+  <header class="nt-top">
+    <span class="grow"></span>
+    <button class="nt-icon" id="panel" title="Tab manager (Alt+Shift+T)">🗂</button>
+    <a class="nt-icon" id="web" title="Open Burrow">↗</a>
+    <button class="nt-icon" id="settings" title="Customize this page">⚙</button>
+  </header>
+  <main class="nt">
+    <section class="nt-hero">
+      <div class="nt-clock" id="clock"></div>
+      <div class="nt-greet" id="greet"></div>
+      <div class="nt-search">
+        <input id="q" placeholder="Search Burrow or the web…" autocomplete="off" autofocus>
+        <div id="results" class="nt-results" hidden></div>
+      </div>
+    </section>
+    <div id="notice"></div>
+    <section id="sec-favorites" class="nt-sec" hidden><h2>★ Favorites</h2><div id="favorites" class="nt-tiles"></div></section>
+    <section id="sec-workspaces" class="nt-sec" hidden><h2>🗂 Workspaces</h2><div id="workspaces" class="nt-spaces"></div></section>
+    <section id="sec-stacks" class="nt-sec" hidden><h2>📥 Stacks</h2><div id="stacks" class="nt-spaces"></div></section>
+    <section id="sec-recent" class="nt-sec" hidden><h2>🕒 Recently saved</h2><div id="recent" class="nt-list"></div></section>
+  </main>
+  <div id="menu" class="nt-menu" hidden></div>
+  <script type="module" src="newtab.js"></script>
+</body>
+</html>
