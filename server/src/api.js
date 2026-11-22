@@ -270,6 +270,7 @@ api.delete('/bookmarks/:id', (req, res) => {
   tx(() => {
     db.prepare('DELETE FROM bookmarks WHERE id = ?').run(b.id);
     db.prepare('DELETE FROM bookmarks_fts WHERE rowid = ?').run(b.id);
+    database.unlinkBookmark(req.userId, b.id);
     pruneOrphanTags(req.userId);
   });
   removeFiles(b);
@@ -285,6 +286,7 @@ api.post('/bookmarks/bulk', (req, res) => {
         const b = db.prepare('SELECT * FROM bookmarks WHERE id = ?').get(id);
         db.prepare('DELETE FROM bookmarks WHERE id = ?').run(id);
         db.prepare('DELETE FROM bookmarks_fts WHERE rowid = ?').run(id);
+        database.unlinkBookmark(req.userId, id);
         removeFiles(b);
       } else if (action === 'archive') db.prepare('UPDATE bookmarks SET archived = ? WHERE id = ?').run(value ? 1 : 0, id);
       else if (action === 'favorite') db.prepare('UPDATE bookmarks SET favorite = ? WHERE id = ?').run(value ? 1 : 0, id);

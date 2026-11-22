@@ -142,9 +142,65 @@ function popover(anchor, build, { width = 280, className = '' } = {}) {
 }
 const menuItem = (label, fn, cls = '') => h('button', { class: 'db-menu-item ' + cls, onclick: fn }, label);
 
+// ───────── drag to reorder (pointer events: works with mouse and touch) ─────────
+/** Rows are the children of `list` with data-idx; dragging a `handle` past a small threshold reorders. */
+function sortable(list, { axis = 'y', handle = '.drag-handle', onMove, threshold = 5 }) {
+  list.classList.add(axis === 'x' ? 'sort-x' : 'sort-y');
+  list.addEventListener('pointerdown', e => {
+    const hd = e.target.closest(handle);
+    const row = hd?.closest('[data-idx]');
+    if (!hd || !row || row.parentNode !== list || e.button > 0) return;
+    const from = +row.dataset.idx, sx = e.clientX, sy = e.clientY;
+    let to = from, started = false;
+    const rows = () => [...list.children].filter(el => el.dataset.idx != null);
+    const clear = () => rows().forEach(el => el.classList.remove('drop-before', 'drop-after', 'dragging'));
+    const move = ev => {
+      if (!started) { if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < threshold) return; started = true; }
+      ev.preventDefault();
+      const els = rows(); clear(); row.classList.add('dragging');
+      let idx = els.findIndex(el => { const r = el.getBoundingClientRect(); return axis === 'x' ? ev.clientX < r.left + r.width / 2 : ev.clientY < r.top + r.height / 2; });
+      if (idx === -1) { idx = els.length; els[els.length - 1].classList.add('drop-after'); } else els[idx].classList.add('drop-before');
+      to = idx > from ? idx - 1 : idx;
+    };
+    const stop = commit => {
+      document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); document.removeEventListener('pointercancel', cancel);
+      clear();
+      if (!started) return;
+      // a drag is not a click: swallow the click that follows pointerup
+      const swallow = ev => { ev.stopPropagation(); ev.preventDefault(); };
+      document.addEventListener('click', swallow, true); setTimeout(() => document.removeEventListener('click', swallow, true), 0);
+      if (commit && to !== from) onMove(from, to);
+    };
+    const up = () => stop(true), cancel = () => stop(false);
+    document.addEventListener('pointermove', move, { passive: false }); document.addEventListener('pointerup', up); document.addEventListener('pointercancel', cancel);
+  });
+  return list;
+}
+const moveItem = (arr, from, to) => { const a = [...arr]; a.splice(to, 0, a.splice(from, 1)[0]); return a; };
+
 // ───────── schema & data ─────────
 const schemas = {}; // page → { properties, views, settings }
 const titleCache = new Map(); // relation targets: id → {title,url,favicon}
+const relOptions = new Map(); // relation prop id → pages of its linked collection [{id,title,url}]
+
+/** Load the pages each relation can link to (its linked collection), for pickers, filters and board columns. */
+async function loadRelOptions(schema, items) {
+  const rels = schema.properties.filter(p => p.type === 'relation');
+  await Promise.all(rels.filter(p => p.config.collectionId).map(async p => {
+    try {
+      const { items: pages } = await B().api(`/bookmarks?collection=${p.config.collectionId}&limit=200&sort=title`);
+      relOptions.set(p.id, pages.map(r => ({ id: r.id, title: r.title || r.url || (r.note || '').split('\n')[0] || 'Untitled', url: r.url })));
+      pages.forEach(r => titleCache.set(r.id, { id: r.id, title: r.title, url: r.url, favicon: r.favicon }));
+    } catch {}
+  }));
+  const ids = [...new Set(items.flatMap(it => rels.flatMap(p => it.props?.[p.id] || [])))];
+  await fetchTitles(ids);
+}
+function relationChoices(ctx, prop) {
+  if (relOptions.has(prop.id)) return relOptions.get(prop.id);
+  const ids = [...new Set(ctx.items.flatMap(it => it.props?.[prop.id] || []))];
+  return ids.map(id => ({ id, title: titleCache.get(id)?.title || titleCache.get(id)?.url || 'Untitled' }));
+}
 async function loadSchema(page, force) {
   if (!force && schemas[page]) return schemas[page];
   const s = await B().api('/schema?page=' + encodeURIComponent(page));
@@ -227,7 +283,8 @@ function sortKey(item, prop, schema) {
     case 'tags': return v.join(',').toLowerCase();
     case 'date': return +parseD(v.start);
     case 'checkbox': return v ? 1 : 0;
-    case 'relation': case 'file': return v.length;
+    case 'relation': return v.map(id => (titleCache.get(id)?.title || '').toLowerCase()).sort().join(',') || null;
+    case 'file': return v.length;
     case 'collection': return (B().state.collections.find(c => c.id === v)?.name || '').toLowerCase();
     case 'formula': return v?.error ? null : v instanceof Date ? +v : typeof v === 'boolean' ? +v : typeof v === 'string' ? v.toLowerCase() : v;
     default: return typeof v === 'string' ? v.toLowerCase() : v;
@@ -246,7 +303,8 @@ function opsFor(prop) {
     case 'select': case 'collection': return [T('is', 'is'), T('is_not', 'is not'), ...empty];
     case 'status': return [T('is', 'is'), T('is_not', 'is not'), T('group', 'is in group'), ...empty];
     case 'multi_select': case 'tags': return [T('has', 'contains'), T('has_not', 'does not contain'), ...empty];
-    case 'relation': case 'file': return empty;
+    case 'relation': return [T('has', 'contains'), T('has_not', 'does not contain'), ...empty];
+    case 'file': return empty;
     case 'checkbox': return [T('checked', 'is checked', false), T('unchecked', 'is not checked', false)];
     case 'date': case 'created_time': return [T('on', 'is'), T('before', 'is before'), T('after', 'is after'), T('on_before', 'is on or before'), T('on_after', 'is on or after'),
       T('today', 'is today', false), T('past_week', 'within past week', false), T('past_month', 'within past month', false),
@@ -333,7 +391,7 @@ function applyView(items, view, schema) {
 }
 
 // ───────── grouping ─────────
-const GROUPABLE = new Set(['select', 'status', 'multi_select', 'checkbox', 'tags', 'collection']);
+const GROUPABLE = new Set(['select', 'status', 'multi_select', 'checkbox', 'tags', 'collection', 'relation']);
 function groupsFor(items, prop, schema, view) {
   const none = { id: '__none', name: `No ${prop.name}`, color: 'default', items: [] };
   let groups;
@@ -341,6 +399,8 @@ function groupsFor(items, prop, schema, view) {
   else if (prop.type === 'tags') groups = [...new Set(items.flatMap(i => i.tags.map(t => t.name)))].sort().map(n => ({ id: n, name: '#' + n, color: 'purple', items: [] }));
   else if (prop.type === 'collection') groups = B().state.collections.map(c => ({ id: String(c.id), name: `${c.icon} ${c.name}`, color: 'blue', items: [] }));
   else if (prop.type === 'status') groups = STATUS_GROUPS.flatMap(([g]) => prop.config.options.filter(o => o.group === g)).map(o => ({ ...o, items: [] }));
+  else if (prop.type === 'relation') groups = (relOptions.get(prop.id) || [...new Set(items.flatMap(i => rawValue(i, prop, schema) || []))]
+    .map(id => ({ id, title: titleCache.get(id)?.title || titleCache.get(id)?.url || 'Untitled' }))).map(o => ({ id: String(o.id), name: '↗ ' + o.title, color: 'default', items: [] }));
   else groups = (prop.config?.options || []).map(o => ({ ...o, items: [] }));
   const byId = new Map(groups.map(g => [String(g.id), g]));
   for (const it of items) {
@@ -582,17 +642,27 @@ function dateEditor(anchor, v, save) {
 function relationEditor(ctx, item, prop, anchor, v) {
   let selected = [...v];
   return popover(anchor, el => {
-    const inp = h('input', { class: 'input', placeholder: 'Search pages to link…' });
+    const target = B().state.collections.find(c => c.id === prop.config.collectionId);
+    const inp = h('input', { class: 'input', placeholder: target ? `Search ${target.name}…` : 'Search pages to link…' });
     const chosen = h('div', { class: 'chips db-sel' });
     const results = h('div', { class: 'db-opts' });
     const drawChosen = () => chosen.replaceChildren(...selected.map((id, i) => h('span', { class: 'opt x', style: { '--oc': HEX.default },
       onclick: () => { selected.splice(i, 1); drawChosen(); } }, '↗ ' + (titleCache.get(id)?.title || titleCache.get(id)?.url || '…') + ' ×')));
     const search = B().debounce(async () => {
-      const p = new URLSearchParams({ limit: 12, archived: 'all' });
+      const p = new URLSearchParams({ limit: 30, archived: 'all' });
       if (inp.value.trim()) p.set('q', inp.value.trim());
       if (prop.config.collectionId) p.set('collection', prop.config.collectionId);
       const { items } = await B().api('/bookmarks?' + p);
-      results.replaceChildren(...items.filter(r => r.id !== item.id).map(r => {
+      const q = inp.value.trim();
+      const target = B().state.collections.find(c => c.id === prop.config.collectionId);
+      const create = q && !items.some(r => (r.title || '').toLowerCase() === q.toLowerCase()) ? h('div', { class: 'db-opt-row create', onclick: async () => {
+        try {
+          const made = await B().api('/bookmarks', { method: 'POST', body: { title: q, ...(target ? { collectionId: target.id } : {}) } });
+          titleCache.set(made.id, { id: made.id, title: made.title }); relOptions.delete(prop.id);
+          selected = [...selected, made.id]; inp.value = ''; drawChosen(); search(); B().refreshMeta();
+        } catch (e) { B().toast(e.message); }
+      } }, `+ New “${q}”${target ? ` in ${target.icon} ${target.name}` : ''}`) : null;
+      results.replaceChildren(create, ...items.filter(r => r.id !== item.id).map(r => {
         titleCache.set(r.id, { id: r.id, title: r.title, url: r.url, favicon: r.favicon });
         return h('div', { class: 'db-opt-row' + (selected.includes(r.id) ? ' on' : ''), onclick: () => {
           selected = selected.includes(r.id) ? selected.filter(x => x !== r.id) : [...selected, r.id]; drawChosen(); search(); } },
@@ -654,28 +724,27 @@ function openPropertiesEditor(page, onDone) {
   const expanded = new Set();
   async function draw() {
     const schema = await loadSchema(page, true);
+    schemaAll = await B().api('/properties').catch(() => []);
     const props = schema.properties;
     const row = (p, i) => {
       const open = expanded.has(p.id);
       const save = B().debounce(async changes => { try { await updateProperty(p, changes); if (changes.type) draw(); } catch (e) { B().toast(e.message); } }, 350);
-      return h('div', { class: 'db-prop' + (open ? ' open' : '') },
+      return h('div', { class: 'db-prop' + (open ? ' open' : ''), 'data-idx': i },
         h('div', { class: 'row' },
+          h('span', { class: 'drag-handle', title: 'Drag to reorder' }, '⋮⋮'),
           h('span', { class: 'db-ti', title: TYPES[p.type][1] }, TYPES[p.type][0]),
           h('input', { class: 'input grow', value: p.name, oninput: e => { p.name = e.target.value; save({ name: p.name }); } }),
-          h('button', { class: 'btn icon', title: 'Move up', disabled: i === 0, onclick: () => move(i, -1) }, '↑'),
-          h('button', { class: 'btn icon', title: 'Move down', disabled: i === props.length - 1, onclick: () => move(i, 1) }, '↓'),
           h('button', { class: 'btn icon', title: 'Settings', onclick: () => { open ? expanded.delete(p.id) : expanded.add(p.id); draw(); } }, open ? '▾' : '⚙')),
         h('div', { class: 'muted db-hint' }, TYPES[p.type][1], ' · ', p.collection_id ? 'only this collection' : 'all pages'),
         open ? propConfig(p, schema, save, draw) : null);
     };
-    const move = async (i, d) => {
-      const ids = props.map(p => p.id); [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
-      await B().api('/properties/reorder', { method: 'POST', body: { ids } }); draw();
-    };
+    const list = sortable(h('div', { class: 'db-prop-list' }, props.map(row)), { onMove: async (from, to) => {
+      await B().api('/properties/reorder', { method: 'POST', body: { ids: moveItem(props.map(p => p.id), from, to) } }); draw();
+    } });
     scroll.replaceChildren(
       h('p', { class: 'muted' }, cid ? `Properties for ${col?.icon || ''} ${col?.name || 'this collection'}. Properties marked "all pages" are shared with Home and every collection.`
         : 'These properties are available on every bookmark. Collections can add their own extra properties.'),
-      ...props.map(row),
+      list,
       props.length ? null : h('div', { class: 'empty', style: { padding: '24px' } }, 'No properties yet.'),
       h('button', { class: 'btn', onclick: e => addPropertyMenu(e.currentTarget, page, p => { expanded.add(p.id); draw(); }) }, '+ Add property'));
   }
@@ -686,6 +755,7 @@ function openPropertiesEditor(page, onDone) {
   draw();
 }
 
+let schemaAll = []; // every property (to name the other side of two-way relations)
 function propConfig(p, schema, save, redraw) {
   const c = p.config;
   const field = (label, ...kids) => h('div', { class: 'field' }, h('label', {}, label), kids);
@@ -739,7 +809,17 @@ function propConfig(p, schema, save, redraw) {
         h('p', {}, F().functions.join(', '))))];
     setTimeout(check);
   } else if (p.type === 'relation') {
-    body = [field('Link to pages in', select(c.collectionId ?? '', [['', 'Any page'], ...B().state.collections.map(x => [x.id, `${x.icon} ${x.name}`])], v => { c.collectionId = v ? +v : null; save({ config: c }); }))];
+    const target = B().state.collections.find(x => x.id === c.collectionId);
+    const pair = c.pairedId ? schemaAll.find(x => x.id === c.pairedId) : null;
+    const apply = () => updateProperty(p, { config: c }).then(() => { Object.keys(schemas).forEach(k => delete schemas[k]); redraw(); }).catch(e => B().toast(e.message));
+    body = [
+      field('Link to pages in', select(c.collectionId ?? '', [['', 'Any page'], ...B().state.collections.map(x => [x.id, `${x.icon} ${x.name}`])], v => { c.collectionId = v ? +v : null; apply(); })),
+      h('label', { class: 'row db-menu-check' }, h('input', { type: 'checkbox', checked: !!c.twoWay, onchange: e => { c.twoWay = e.target.checked; apply(); } }),
+        ` Show on ${target ? `${target.icon} ${target.name}` : 'the linked pages'} too (two-way)`),
+      h('div', { class: 'muted db-hint' }, c.twoWay
+        ? `Links show on both sides and stay in sync${pair ? ` — the other side is the “${pair.name}” property` : ''}. Turning this off removes the other side.`
+        : 'Turn on to also see, on each linked page, what links to it.'),
+    ];
   } else if (p.type === 'id') {
     body = [field('Prefix (optional)', h('input', { class: 'input', value: c.prefix || '', placeholder: 'e.g. TASK', oninput: e => { c.prefix = e.target.value; save({ config: c }); } })),
       h('div', { class: 'muted db-hint' }, 'IDs are generated automatically and can’t be changed.')];
@@ -809,6 +889,7 @@ async function render(container, page, opts = {}) {
     const cid = pageCollection(page); if (cid) params.set('collection', cid);
     if (ctx.q) params.set('q', ctx.q);
     const [schema, res] = await Promise.all([loadSchema(page, true), B().api('/bookmarks?' + params)]);
+    await loadRelOptions(schema, res.items);
     if (container._dbToken !== myToken) return false;
     ctx.schema = schema; ctx.items = res.items; B().state.dbItems = res.items;
     if (!schema.views.length) schema.views = [{ id: null, page, name: 'All', type: B().currentTheme().cards.layout === 'list' ? 'list' : 'grid', config: { filters: [], sorts: [], visible: [], filterMode: 'and' } }];
@@ -938,6 +1019,8 @@ function filterValueInput(ctx, prop, f, onChange) {
   const opts = prop.type === 'collection' ? B().state.collections.map(c => ({ id: String(c.id), name: `${c.icon} ${c.name}` }))
     : prop.type === 'tags' ? B().state.tags.map(t => ({ id: t.name, name: '#' + t.name }))
     : prop.type === 'multi_select' ? (prop.config.options || []).map(o => ({ id: o.name, name: o.name })) : prop.config?.options;
+  if (prop.type === 'relation') return h('select', { class: 'input', onchange: e => onChange(e.target.value) }, h('option', { value: '' }, 'Choose a page…'),
+    relationChoices(ctx, prop).map(o => h('option', { value: o.id, selected: String(f.value) === String(o.id) }, o.title)));
   if (f.op === 'group') return h('select', { class: 'input', onchange: e => onChange(e.target.value) }, h('option', { value: '' }, 'Choose…'), STATUS_GROUPS.map(([g, l]) => h('option', { value: g, selected: f.value === g }, l)));
   if (opts && ['select', 'status', 'multi_select', 'tags', 'collection'].includes(prop.type))
     return h('select', { class: 'input', onchange: e => onChange(e.target.value) }, h('option', { value: '' }, 'Choose…'), opts.map(o => h('option', { value: o.id, selected: String(f.value) === String(o.id) }, o.name)));
@@ -998,11 +1081,18 @@ function groupMenu(ctx, view, anchor) {
 
 function visibleMenu(ctx, view, anchor) {
   popover(anchor, (el, close) => {
-    const vis = defaultVisible(view, ctx.schema);
-    const toggle = k => updateView(ctx, view, c => { c.visible = vis.includes(k) ? vis.filter(x => x !== k) : [...vis, k]; if (!c.visible.length) c.visible = ['title']; });
-    el.append(h('div', { class: 'db-pop-title' }, 'Shown in this view'),
-      ...allProps(ctx.schema).filter(p => p.key !== 'title').map(p => h('label', { class: 'row db-menu-check' },
-        h('input', { type: 'checkbox', checked: vis.includes(p.key), onchange: () => toggle(p.key) }), ` ${TYPES[p.type][0]}  ${p.name}`)),
+    let vis = defaultVisible(view, ctx.schema);
+    const all = allProps(ctx.schema).filter(p => p.key !== 'title');
+    let order = [...vis.map(k => all.find(p => p.key === k)).filter(Boolean), ...all.filter(p => !vis.includes(p.key))];
+    const list = h('div', { class: 'db-sort-list' });
+    const draw = () => list.replaceChildren(...order.map((p, i) => h('div', { class: 'row db-menu-check db-sort-row', 'data-idx': i },
+      h('span', { class: 'drag-handle', title: 'Drag to reorder' }, '⋮⋮'),
+      h('label', { class: 'row grow' }, h('input', { type: 'checkbox', checked: vis.includes(p.key), onchange: () => toggle(p.key) }), ` ${TYPES[p.type][0]}  ${p.name}`))));
+    const commit = () => updateView(ctx, view, c => { c.visible = vis.length ? vis : ['title']; });
+    const toggle = k => { vis = vis.includes(k) ? vis.filter(x => x !== k) : order.map(p => p.key).filter(x => x === k || vis.includes(x)); draw(); commit(); };
+    sortable(list, { onMove: (from, to) => { order = moveItem(order, from, to); vis = order.map(p => p.key).filter(k => vis.includes(k)); draw(); commit(); } });
+    draw();
+    el.append(h('div', { class: 'db-pop-title' }, 'Shown in this view · drag ⋮⋮ to reorder'), list,
       h('hr'), menuItem('+ New property', e => { close(); addPropertyMenu(anchor, ctx.page, p => { view.config.visible = [...vis, p.key]; persistView(ctx, view).then(() => ctx.reload()); }); }),
       menuItem('⚙ Edit properties…', () => { close(); openPropertiesEditor(ctx.page, () => ctx.reload()); }));
   }, { width: 280 });
@@ -1061,6 +1151,7 @@ function newItem(ctx, anchor, group, groupProp) {
         else if (k === 'tags') body.tags = [group.id];
         else if (groupProp.type === 'checkbox') body.props = { [groupProp.id]: group.id === 'true' };
         else if (groupProp.type === 'multi_select') body.props = { [groupProp.id]: [group.id] };
+        else if (groupProp.type === 'relation') body.props = { [groupProp.id]: [+group.id] };
         else if (!groupProp.builtin) body.props = { [groupProp.id]: group.id };
       }
       if (!isUrl && !body.title) return;
@@ -1081,11 +1172,12 @@ function table(ctx, view, items, group, groupProp) {
   const widths = view.config.widths || {};
   const w = p => (widths[p.key] || (p.type === 'title' ? 280 : ['checkbox', 'favorite'].includes(p.type) ? 90 : p.type === 'text' ? 240 : 170)) + 'px';
   const title = findProp(ctx.schema, 'title');
-  const head = h('div', { class: 'db-tr db-th' }, [title, ...cols].map(p => h('div', { class: 'db-td', style: { width: w(p) } },
+  const head = h('div', { class: 'db-tr db-th' }, [title, ...cols].map((p, i) => h('div', { class: 'db-td', style: { width: w(p) }, 'data-idx': i ? i - 1 : null },
     h('button', { class: 'db-th-btn', onclick: e => headerMenu(ctx, view, p, e.currentTarget) }, h('span', { class: 'db-ti' }, TYPES[p.type][0]), p.name),
     h('span', { class: 'db-resize', onmousedown: e => startResize(e, ctx, view, p) }))),
     h('div', { class: 'db-td add' }, h('button', { class: 'db-th-btn', title: 'Add a property', onclick: e => addPropertyMenu(e.currentTarget, ctx.page, p => {
       view.config.visible = [...defaultVisible(view, ctx.schema), p.key]; persistView(ctx, view).then(() => ctx.reload()); }) }, '+')));
+  sortable(head, { axis: 'x', handle: '.db-th-btn', onMove: (from, to) => updateView(ctx, view, c => { c.visible = moveItem(cols.map(p => p.key), from, to); }) });
   const rows = items.map(it => h('div', { class: 'db-tr' },
     h('div', { class: 'db-td db-title-cell', style: { width: w(title) }, onclick: () => open(it.id) },
       it.favicon ? h('img', { src: it.favicon, alt: '', class: 'fav', onerror: e => e.target.remove() }) : h('span', { class: 'fav' }, { note: '📝', file: '📄', link: '🔗' }[it.type]),
@@ -1185,6 +1277,9 @@ async function moveToGroup(ctx, item, prop, from, to) {
   else if (prop.type === 'multi_select' || prop.type === 'tags') {
     const cur = rawValue(item, prop, ctx.schema) || [];
     v = cur.filter(x => String(x) !== from); if (to !== '__none' && !v.includes(to)) v.push(to);
+  } else if (prop.type === 'relation') {
+    const cur = rawValue(item, prop, ctx.schema) || [];
+    v = cur.filter(x => String(x) !== from); if (to !== '__none' && !v.includes(+to)) v.push(+to);
   } else v = to === '__none' ? null : to;
   await saveValue(ctx, item, prop, v);
   if (prop.key === 'collection' && pageCollection(ctx.page)) ctx.reload();

@@ -31,6 +31,11 @@ burrow/
   - **Dashboard**: switch a page from *Tabs* to *Dashboard* to show all its views stacked, each filtered its own way.
   - **Properties** (page header → **⚙ Properties**): properties made on Home apply to every bookmark; collections can add extra ones. Types: Text (with **bold**/*italic*/`code`/links), Number (plain, commas, percent, currency or progress bar), Select, Status (To-do / In progress / Complete), Multi-select, Date (ranges, optional time), Formula, Relation, Files & media, Checkbox, URL, Created time, Button (runs actions like "set Status to Done") and ID (with a prefix).
   - Edit values in table cells, by dragging board cards between columns, or in the item panel. Group and filter by any property.
+  - **Relations between pages**: give Projects an **Area** relation that links to pages in an *Areas* collection.
+    - Turn on **two-way** to also get a "Projects" property on each area, kept in sync from both sides.
+    - The picker searches the linked collection and can create a new page there.
+    - Group a board by Area (one column per area; drag cards to move them) or filter with "Area contains Health".
+  - **Reorder properties** by dragging ⋮⋮: the page's order in ⚙ Properties, and each view's column order in its Properties menu or by dragging table column headers.
   - **Formulas**: a safe formula language similar to Notion's, e.g. `prop("Price") * 1.21`, `if(prop("Done"), "✅", "⏳")`, `dateBetween(prop("Due"), today(), "days")`, `prop("Title").upper()`.
 - **Collections**, **favorites**, **archive**, **bulk actions** (tag, move, archive, delete).
 - Optional **AI auto-tagging** with Claude or a local Ollama model. AI tags show as `✦ tag`.

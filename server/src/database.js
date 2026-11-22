@@ -49,7 +49,8 @@ function cleanConfig(type, c = {}) {
     };
     case 'date': return { format: ['short', 'long', 'iso', 'relative'].includes(c.format) ? c.format : 'short' };
     case 'formula': return { expression: str(c.expression, 4000) };
-    case 'relation': return { collectionId: int(c.collectionId) };
+    // twoWay: a matching relation on the target collection is kept in sync (pairedId is managed by the server)
+    case 'relation': return { collectionId: int(c.collectionId), twoWay: !!c.twoWay, pairedId: null };
     case 'id': return { prefix: str(c.prefix, 12).replace(/[^\w-]/g, '') };
     case 'button': return {
       label: str(c.label, 40) || 'Run',
@@ -114,6 +115,53 @@ function propsFor(ids) {
   return out;
 }
 
+// ───────── two-way relations ─────────
+const relIds = v => (Array.isArray(v) ? v : []).map(Number);
+function readRel(bookmarkId, propId) {
+  const r = db.prepare('SELECT value FROM prop_values WHERE bookmark_id = ? AND prop_id = ?').get(bookmarkId, propId);
+  return r ? relIds(JSON.parse(r.value)) : [];
+}
+function writeRel(bookmarkId, propId, ids) {
+  if (!ids.length) db.prepare('DELETE FROM prop_values WHERE bookmark_id = ? AND prop_id = ?').run(bookmarkId, propId);
+  else db.prepare('INSERT INTO prop_values (bookmark_id, prop_id, value) VALUES (?,?,?) ON CONFLICT DO UPDATE SET value = excluded.value')
+    .run(bookmarkId, propId, JSON.stringify([...new Set(ids)]));
+}
+/** X's relation changed from oldIds to newIds: mirror it on the paired property of each linked page. */
+function mirror(bookmarkId, pairedId, oldIds, newIds) {
+  for (const y of oldIds.filter(id => !newIds.includes(id))) writeRel(y, pairedId, readRel(y, pairedId).filter(id => id !== bookmarkId));
+  for (const y of newIds.filter(id => !oldIds.includes(id))) {
+    if (!db.prepare('SELECT 1 FROM bookmarks WHERE id = ?').get(y)) continue;
+    const cur = readRel(y, pairedId); if (!cur.includes(bookmarkId)) writeRel(y, pairedId, [...cur, bookmarkId]);
+  }
+}
+
+/** Create, update or remove the paired property so it matches prop.config.twoWay. */
+function syncPairing(userId, propId) {
+  const p = db.prepare('SELECT * FROM properties WHERE id = ?').get(propId);
+  if (!p || p.type !== 'relation') return;
+  const cfg = JSON.parse(p.config);
+  const pair = cfg.pairedId ? db.prepare('SELECT * FROM properties WHERE id = ? AND user_id = ?').get(cfg.pairedId, userId) : null;
+  const save = (id, c) => db.prepare('UPDATE properties SET config = ? WHERE id = ?').run(JSON.stringify(c), id);
+  if (!cfg.twoWay) {
+    if (pair) db.prepare('DELETE FROM properties WHERE id = ?').run(pair.id);
+    if (cfg.pairedId) save(p.id, { ...cfg, pairedId: null });
+    return;
+  }
+  const target = cfg.collectionId ?? null;
+  if (pair && pair.collection_id === target && JSON.parse(pair.config).collectionId === (p.collection_id ?? null)) return; // already right
+  if (pair) db.prepare('DELETE FROM properties WHERE id = ?').run(pair.id);
+  // Name the other side after where the links come from, e.g. "Projects" on the Areas pages
+  const srcName = p.collection_id ? db.prepare('SELECT name FROM collections WHERE id = ?').get(p.collection_id)?.name : null;
+  const name = srcName && srcName !== p.name ? srcName : `${p.name} (linked)`;
+  const pos = db.prepare('SELECT COALESCE(MAX(position), 0) + 1 p FROM properties WHERE user_id = ?').get(userId).p;
+  const pairId = Number(db.prepare('INSERT INTO properties (user_id, collection_id, name, type, config, position) VALUES (?,?,?,?,?,?)')
+    .run(userId, target, name, 'relation', JSON.stringify({ collectionId: p.collection_id ?? null, twoWay: true, pairedId: p.id }), pos).lastInsertRowid);
+  save(p.id, { ...cfg, pairedId: pairId });
+  // Backfill: every existing link X → Y also appears as Y → X
+  for (const r of db.prepare('SELECT bookmark_id, value FROM prop_values WHERE prop_id = ?').all(p.id))
+    mirror(r.bookmark_id, pairId, [], relIds(JSON.parse(r.value)));
+}
+
 /** Apply { propId: value } changes to one bookmark. Throws on invalid input. */
 function setProps(userId, bookmarkId, changes) {
   for (const [pid, raw] of Object.entries(changes || {})) {
@@ -122,6 +170,8 @@ function setProps(userId, bookmarkId, changes) {
     if (!STORED.has(prop.type)) throw Object.assign(new Error(`${prop.name} is computed and can't be edited`), { status: 400 });
     const v = cleanValue(userId, prop, raw);
     if (v === undefined) throw Object.assign(new Error(`Invalid value for ${prop.name}`), { status: 400 });
+    const pairedId = prop.type === 'relation' ? JSON.parse(prop.config).pairedId : null;
+    if (pairedId) mirror(bookmarkId, pairedId, readRel(bookmarkId, prop.id), relIds(v || []));
     if (v === null) db.prepare('DELETE FROM prop_values WHERE bookmark_id = ? AND prop_id = ?').run(bookmarkId, prop.id);
     else db.prepare('INSERT INTO prop_values (bookmark_id, prop_id, value) VALUES (?,?,?) ON CONFLICT DO UPDATE SET value = excluded.value')
       .run(bookmarkId, prop.id, JSON.stringify(v));
@@ -134,7 +184,7 @@ router.get('/schema', (req, res) => {
   if (!pageOk(req.userId, page)) return bad(res, 'Unknown page', 404);
   const cid = page === 'home' ? null : +page.slice(2);
   const properties = db.prepare(`SELECT * FROM properties WHERE user_id = ? AND (collection_id IS NULL ${cid ? 'OR collection_id = ?' : ''})
-    ORDER BY collection_id IS NOT NULL, position, id`).all(...[req.userId, ...(cid ? [cid] : [])]).map(parseProp);
+    ORDER BY position, id`).all(...[req.userId, ...(cid ? [cid] : [])]).map(parseProp);
   const views = db.prepare('SELECT * FROM views WHERE user_id = ? AND page = ? ORDER BY position, id').all(req.userId, page).map(parseView);
   const s = db.prepare('SELECT settings FROM page_settings WHERE user_id = ? AND page = ?').get(req.userId, page);
   res.json({ page, properties, views, settings: s ? JSON.parse(s.settings) : {} });
@@ -151,9 +201,14 @@ router.post('/properties', (req, res) => {
   const cid = int(collectionId);
   if (cid && !db.prepare('SELECT 1 FROM collections WHERE id = ? AND user_id = ?').get(cid, req.userId)) return bad(res, 'Unknown collection');
   const pos = db.prepare('SELECT COALESCE(MAX(position), 0) + 1 p FROM properties WHERE user_id = ?').get(req.userId).p;
-  const r = db.prepare('INSERT INTO properties (user_id, collection_id, name, type, config, position) VALUES (?,?,?,?,?,?)')
-    .run(req.userId, cid, str(name, 80).trim() || 'Property', type, JSON.stringify(cleanConfig(type, config)), pos);
-  res.status(201).json(parseProp(db.prepare('SELECT * FROM properties WHERE id = ?').get(Number(r.lastInsertRowid))));
+  const id = tx(() => {
+    const r = db.prepare('INSERT INTO properties (user_id, collection_id, name, type, config, position) VALUES (?,?,?,?,?,?)')
+      .run(req.userId, cid, str(name, 80).trim() || 'Property', type, JSON.stringify(cleanConfig(type, config)), pos);
+    const newId = Number(r.lastInsertRowid);
+    syncPairing(req.userId, newId);
+    return newId;
+  });
+  res.status(201).json(parseProp(db.prepare('SELECT * FROM properties WHERE id = ?').get(id)));
 });
 
 router.patch('/properties/:id', (req, res) => {
@@ -161,6 +216,9 @@ router.patch('/properties/:id', (req, res) => {
   if (!p) return bad(res, 'Not found', 404);
   const type = TYPES.includes(req.body?.type) ? req.body.type : p.type;
   const config = cleanConfig(type, req.body?.config ?? JSON.parse(p.config));
+  if (type === 'relation') config.pairedId = JSON.parse(p.config).pairedId || null; // never taken from the client
+  else if (p.type === 'relation' && JSON.parse(p.config).pairedId) // changing away from relation drops the other side
+    db.prepare('DELETE FROM properties WHERE id = ? AND user_id = ?').run(JSON.parse(p.config).pairedId, req.userId);
   const name = req.body?.name !== undefined ? (str(req.body.name, 80).trim() || p.name) : p.name;
   tx(() => {
     db.prepare('UPDATE properties SET name = ?, type = ?, config = ? WHERE id = ?').run(name, type, JSON.stringify(config), p.id);
@@ -171,12 +229,25 @@ router.patch('/properties/:id', (req, res) => {
       if (v === undefined || v === null) db.prepare('DELETE FROM prop_values WHERE bookmark_id = ? AND prop_id = ?').run(r.bookmark_id, p.id);
       else db.prepare('UPDATE prop_values SET value = ? WHERE bookmark_id = ? AND prop_id = ?').run(JSON.stringify(v), r.bookmark_id, p.id);
     }
+    syncPairing(req.userId, p.id);
+    // Turning two-way off on one side turns it off on the other too
+    const pairOf = db.prepare(`SELECT id, config FROM properties WHERE user_id = ? AND type = 'relation' AND json_extract(config, '$.pairedId') = ?`).get(req.userId, p.id);
+    if (pairOf && type === 'relation' && !config.twoWay) {
+      db.prepare('UPDATE properties SET config = ? WHERE id = ?').run(JSON.stringify({ ...JSON.parse(pairOf.config), twoWay: false, pairedId: null }), pairOf.id);
+    }
   });
   res.json(parseProp(db.prepare('SELECT * FROM properties WHERE id = ?').get(p.id)));
 });
 
 router.delete('/properties/:id', (req, res) => {
-  db.prepare('DELETE FROM properties WHERE id = ? AND user_id = ?').run(int(req.params.id), req.userId);
+  const p = db.prepare('SELECT * FROM properties WHERE id = ? AND user_id = ?').get(int(req.params.id), req.userId);
+  if (!p) return res.json({ ok: true });
+  // Deleting one side of a two-way relation deletes the other side too
+  const pairedId = p.type === 'relation' ? JSON.parse(p.config).pairedId : null;
+  tx(() => {
+    db.prepare('DELETE FROM properties WHERE id = ?').run(p.id);
+    if (pairedId) db.prepare('DELETE FROM properties WHERE id = ? AND user_id = ?').run(pairedId, req.userId);
+  });
   res.json({ ok: true });
 });
 
@@ -271,4 +342,11 @@ router.get('/prop-files/:name', (req, res) => {
   res.sendFile(path.join(DATA_DIR, 'uploads', name), err => { if (err && !res.headersSent) bad(res, 'Not found', 404); });
 });
 
-module.exports = { router, propsFor, setProps, reindexAfterProps: reindex };
+/** Remove a deleted bookmark from every relation that links to it. */
+function unlinkBookmark(userId, bookmarkId) {
+  const rows = db.prepare(`SELECT pv.bookmark_id, pv.prop_id, pv.value FROM prop_values pv JOIN properties p ON p.id = pv.prop_id
+    WHERE p.user_id = ? AND p.type = 'relation' AND EXISTS (SELECT 1 FROM json_each(pv.value) WHERE json_each.value = ?)`).all(userId, bookmarkId);
+  for (const r of rows) writeRel(r.bookmark_id, r.prop_id, relIds(JSON.parse(r.value)).filter(id => id !== bookmarkId));
+}
+
+module.exports = { router, propsFor, setProps, unlinkBookmark, reindexAfterProps: reindex };
