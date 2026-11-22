@@ -193,6 +193,15 @@ async function loadRelOptions(schema, items) {
       pages.forEach(r => titleCache.set(r.id, { id: r.id, title: r.title, url: r.url, favicon: r.favicon }));
     } catch {}
   }));
+  const anyPage = rels.filter(p => !p.config.collectionId);
+  if (anyPage.length) {
+    try {
+      const { items: pages } = await B().api('/bookmarks?limit=200&sort=title&archived=all');
+      const opts = pages.map(r => ({ id: r.id, title: r.title || r.url || (r.note || '').split('\n')[0] || 'Untitled', url: r.url }));
+      pages.forEach(r => titleCache.set(r.id, { id: r.id, title: r.title, url: r.url, favicon: r.favicon }));
+      anyPage.forEach(p => relOptions.set(p.id, opts));
+    } catch {}
+  }
   const ids = [...new Set(items.flatMap(it => rels.flatMap(p => it.props?.[p.id] || [])))];
   await fetchTitles(ids);
 }
@@ -342,7 +351,11 @@ function matches(item, f, schema) {
     }
   }
   if (f.value == null || f.value === '') return true; // incomplete rule: ignore
-  const list = Array.isArray(v) ? v : null;
+  let list = Array.isArray(v) ? v : null;
+  if (list && prop.type === 'multi_select') { // match the option id, or its name (filters saved by older versions)
+    const opts = prop.config.options || [];
+    list = list.flatMap(id => [id, opts.find(o => o.id === id)?.name].filter(Boolean));
+  }
   switch (f.op) {
     case 'has': return !!list && list.map(x => String(x).toLowerCase()).includes(String(f.value).toLowerCase());
     case 'has_not': return !list || !list.map(x => String(x).toLowerCase()).includes(String(f.value).toLowerCase());
@@ -399,7 +412,7 @@ function groupsFor(items, prop, schema, view) {
   else if (prop.type === 'tags') groups = [...new Set(items.flatMap(i => i.tags.map(t => t.name)))].sort().map(n => ({ id: n, name: '#' + n, color: 'purple', items: [] }));
   else if (prop.type === 'collection') groups = B().state.collections.map(c => ({ id: String(c.id), name: `${c.icon} ${c.name}`, color: 'blue', items: [] }));
   else if (prop.type === 'status') groups = STATUS_GROUPS.flatMap(([g]) => prop.config.options.filter(o => o.group === g)).map(o => ({ ...o, items: [] }));
-  else if (prop.type === 'relation') groups = (relOptions.get(prop.id) || [...new Set(items.flatMap(i => rawValue(i, prop, schema) || []))]
+  else if (prop.type === 'relation') groups = ((prop.config.collectionId && relOptions.get(prop.id)) || [...new Set(items.flatMap(i => rawValue(i, prop, schema) || []))]
     .map(id => ({ id, title: titleCache.get(id)?.title || titleCache.get(id)?.url || 'Untitled' }))).map(o => ({ id: String(o.id), name: '↗ ' + o.title, color: 'default', items: [] }));
   else groups = (prop.config?.options || []).map(o => ({ ...o, items: [] }));
   const byId = new Map(groups.map(g => [String(g.id), g]));
@@ -1018,7 +1031,7 @@ function filterValueInput(ctx, prop, f, onChange) {
   if (!op || !op.value) return null;
   const opts = prop.type === 'collection' ? B().state.collections.map(c => ({ id: String(c.id), name: `${c.icon} ${c.name}` }))
     : prop.type === 'tags' ? B().state.tags.map(t => ({ id: t.name, name: '#' + t.name }))
-    : prop.type === 'multi_select' ? (prop.config.options || []).map(o => ({ id: o.name, name: o.name })) : prop.config?.options;
+    : prop.config?.options;
   if (prop.type === 'relation') return h('select', { class: 'input', onchange: e => onChange(e.target.value) }, h('option', { value: '' }, 'Choose a page…'),
     relationChoices(ctx, prop).map(o => h('option', { value: o.id, selected: String(f.value) === String(o.id) }, o.title)));
   if (f.op === 'group') return h('select', { class: 'input', onchange: e => onChange(e.target.value) }, h('option', { value: '' }, 'Choose…'), STATUS_GROUPS.map(([g, l]) => h('option', { value: g, selected: f.value === g }, l)));

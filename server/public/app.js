@@ -813,11 +813,13 @@ async function renderSpaces(el) {
 
 // ───────── settings ─────────
 async function renderSettings(el) {
+  api('/auth/status').then(st => { const v = $('#app-version'); if (v) v.textContent = `Burrow v${st.version}`; }).catch(() => {});
   const tokens = await api('/tokens');
   const tokenOut = h('div');
   el.append(
     h('div', { class: 'page-title' }, h('h2', {}, 'Settings')),
     h('section', { class: 'panel' }, h('h3', {}, 'Account'),
+      h('p', { class: 'muted', id: 'app-version', style: { fontSize: '12px', margin: '0 0 6px' } }),
       h('p', {}, 'Signed in as ', h('b', {}, state.me.username), state.me.aiEnabled ? ' · ✦ AI tagging enabled' : ' · AI tagging off (set AI_PROVIDER to enable)'),
       h('div', { class: 'row' },
         h('button', { class: 'btn', onclick: () => { location.hash = '#/'; setTimeout(openThemeEditor, 50); } }, '🎨 Customize theme'),

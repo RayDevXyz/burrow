@@ -1,6 +1,6 @@
 {
   "name": "burrow-server",
-  "version": "1.0.0",
+  "version": "1.4.0",
   "description": "Self-hosted bookmark manager, read-it-later and archive",
   "main": "src/index.js",
   "type": "commonjs",

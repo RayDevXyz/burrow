@@ -21,7 +21,7 @@ const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 // ───────────────────────── Auth ─────────────────────────
 api.get('/auth/status', (req, res) => {
   const count = db.prepare('SELECT COUNT(*) c FROM users').get().c;
-  res.json({ needsSetup: count === 0, allowSignup: ALLOW_SIGNUP, aiEnabled: aiEnabled() });
+  res.json({ needsSetup: count === 0, allowSignup: ALLOW_SIGNUP, aiEnabled: aiEnabled(), version: require('../package.json').version });
 });
 
 api.post('/auth/register', (req, res) => {
