@@ -383,3 +383,8 @@ body.glass .db-kcard { background: color-mix(in srgb, var(--panel) 72%, transpar
 .db-prop-list { display: flex; flex-direction: column; gap: 8px; }
 .db-sort-row { padding: 2px 4px; border-radius: 6px; }
 .db-sort-row label { gap: 6px; cursor: pointer; }
+
+/* linked views (showing another page's bookmarks) */
+.db-src { margin-left: 3px; font-size: 11px; color: var(--accent); }
+.db-src-link { font-size: 12px; color: var(--muted); background: var(--panel-2); border-radius: 6px; padding: 2px 8px; white-space: nowrap; }
+.db-src-link:hover { color: var(--accent); }

@@ -894,20 +894,32 @@ function defaultVisible(view, schema) {
 
 /** Render the views of a page (Home or a collection) into a container. */
 async function render(container, page, opts = {}) {
-  const ctx = { page, container, q: opts.q || '', expanded: new Set() };
+  const ctx = { page, container, q: opts.q || '', expanded: new Set(), data: {} };
+  ctx.root = ctx;
   const myToken = (container._dbToken = Math.random());
   container.replaceChildren(h('div', { class: 'db-loading muted' }, h('span', { class: 'spinner' }), ' Loading…'));
-  async function load() {
+  /** Schema + bookmarks of one page (this page, or another page a linked view shows). */
+  async function loadSource(src) {
     const params = new URLSearchParams({ full: '1' });
-    const cid = pageCollection(page); if (cid) params.set('collection', cid);
+    const cid = pageCollection(src); if (cid) params.set('collection', cid);
     if (ctx.q) params.set('q', ctx.q);
-    const [schema, res] = await Promise.all([loadSchema(page, true), B().api('/bookmarks?' + params)]);
+    const [schema, res] = await Promise.all([loadSchema(src, true), B().api('/bookmarks?' + params)]);
     await loadRelOptions(schema, res.items);
+    return { schema, items: res.items };
+  }
+  async function load() {
+    const host = await loadSource(page);
     if (container._dbToken !== myToken) return false;
-    ctx.schema = schema; ctx.items = res.items; B().state.dbItems = res.items;
-    if (!schema.views.length) schema.views = [{ id: null, page, name: 'All', type: B().currentTheme().cards.layout === 'list' ? 'list' : 'grid', config: { filters: [], sorts: [], visible: [], filterMode: 'and' } }];
+    ctx.schema = host.schema; ctx.items = host.items; B().state.dbItems = host.items;
+    ctx.views = host.schema.views.length ? host.schema.views
+      : [{ id: null, page, name: 'All', type: B().currentTheme().cards.layout === 'list' ? 'list' : 'grid', config: { filters: [], sorts: [], visible: [], filterMode: 'and' } }];
+    const data = { [page]: host };
+    const linked = [...new Set(ctx.views.map(v => v.config.source).filter(src => src && src !== page))];
+    await Promise.all(linked.map(async src => { try { data[src] = await loadSource(src); } catch (e) { data[src] = { error: e.message }; } }));
+    if (container._dbToken !== myToken) return false;
+    ctx.data = data;
     const saved = B().store.get('view.' + page, null);
-    if (!ctx.activeId || !schema.views.some(v => v.id === ctx.activeId)) ctx.activeId = schema.views.some(v => v.id === saved) ? saved : schema.views[0].id;
+    if (!ctx.activeId || !ctx.views.some(v => v.id === ctx.activeId)) ctx.activeId = ctx.views.some(v => v.id === saved) ? saved : ctx.views[0].id;
     return true;
   }
   ctx.reload = async () => { if (await load()) ctx.draw(); };
@@ -922,6 +934,24 @@ function schedulePoll(ctx) {
   if (ctx.items.some(i => i.status === 'pending')) ctx.poll = setTimeout(() => { if (document.body.contains(ctx.container)) ctx.reload(); }, 3000);
 }
 
+// ───────── linked views: a view can show the bookmarks of another page ─────────
+const sourceOf = (ctx, view) => view.config.source || ctx.page;
+function pageLabel(src) {
+  if (!src || src === 'home') return '🏠 Home';
+  const c = B().state.collections.find(c => 'c:' + c.id === src);
+  return c ? `${c.icon} ${c.name}` : 'a deleted collection';
+}
+/** A per-view context: same page and views, but the schema and items of the view's source. */
+function viewCtx(ctx, view) {
+  const src = sourceOf(ctx, view), d = ctx.data[src];
+  return Object.assign(Object.create(ctx), { dataPage: src, linked: src !== ctx.page, schema: d?.schema, items: d?.items || [], sourceError: d ? d.error : 'Not loaded' });
+}
+function sourceSelect(ctx, value, onChange) {
+  return h('select', { class: 'input', onchange: e => onChange(e.target.value) },
+    [[ctx.page, `This page (${pageLabel(ctx.page)})`], ...['home', ...B().state.collections.map(c => 'c:' + c.id)].filter(s => s !== ctx.page).map(s => [s, pageLabel(s)])]
+      .map(([v, l]) => h('option', { value: v, selected: v === value }, l)));
+}
+
 // The local view object (and its config) stays the source of truth while menus are open,
 // so only the id is taken from the server response.
 async function persistView(ctx, view) {
@@ -929,7 +959,7 @@ async function persistView(ctx, view) {
   if (view.id == null) {
     view._saving ||= B().api('/views', { method: 'POST', body: { page: ctx.page, ...body } });
     const created = await view._saving;
-    if (view.id == null) { view.id = created.id; ctx.activeId = created.id; B().store.set('view.' + ctx.page, created.id); await persistView(ctx, view); }
+    if (view.id == null) { view.id = created.id; ctx.root.activeId = created.id; B().store.set('view.' + ctx.page, created.id); await persistView(ctx, view); }
     delete view._saving;
   } else {
     await B().api(`/views/${view.id}`, { method: 'PATCH', body });
@@ -940,7 +970,7 @@ const updateView = async (ctx, view, change) => { change(view.config, view); try
 function drawPage(ctx) {
   const { schema, container } = ctx;
   const dashboard = schema.settings.layout === 'dashboard';
-  const views = schema.views;
+  const views = ctx.views;
   const active = views.find(v => v.id === ctx.activeId) || views[0];
   const layoutToggle = h('div', { class: 'seg db-layout', title: 'Show views as tabs, or all at once as a dashboard' },
     [['tabs', 'Tabs'], ['dashboard', 'Dashboard']].map(([v, l]) => h('button', { class: (dashboard ? 'dashboard' : 'tabs') === v ? 'on' : '', onclick: async () => {
@@ -951,30 +981,35 @@ function drawPage(ctx) {
   if (!dashboard) {
     const tabs = h('div', { class: 'db-tabs' },
       h('div', { class: 'db-tabs-scroll' }, views.map(v => h('button', { class: 'db-tab' + (v === active ? ' on' : ''),
-        onclick: e => { if (v === active) return viewMenu(ctx, v, e.currentTarget); ctx.activeId = v.id; B().store.set("view." + ctx.page, v.id); ctx.draw(); },
- }, h('span', { class: 'db-ti' }, VIEW_TYPES[v.type][0]), v.name))),
+        onclick: e => { if (v === active) return viewMenu(viewCtx(ctx, v), v, e.currentTarget); ctx.activeId = v.id; B().store.set("view." + ctx.page, v.id); ctx.draw(); },
+ }, h('span', { class: 'db-ti' }, VIEW_TYPES[v.type][0]), v.name, sourceOf(ctx, v) !== ctx.page ? h('span', { class: 'db-src' }, '↗') : null))),
       addView, layoutToggle);
-    container.replaceChildren(tabs, viewBlock(ctx, active, { showTitle: false }));
+    container.replaceChildren(tabs, viewBlock(viewCtx(ctx, active), active, { showTitle: false }));
     // Keep the active tab visible when the strip scrolls (phones, many views)
     const strip = tabs.querySelector('.db-tabs-scroll'), on = strip.querySelector('.db-tab.on');
     if (on && strip.scrollWidth > strip.clientWidth) strip.scrollLeft = Math.max(0, on.offsetLeft - strip.clientWidth / 2 + on.offsetWidth / 2);
   } else {
     container.replaceChildren(h('div', { class: 'db-tabs' }, h('div', { class: 'db-tabs-scroll' }, h('span', { class: 'muted db-dash-label' }, `Dashboard · ${views.length} view${views.length === 1 ? '' : 's'}`), addView), layoutToggle),
-      ...views.map(v => viewBlock(ctx, v, { showTitle: true, dashboard: true })));
+      ...views.map(v => viewBlock(viewCtx(ctx, v), v, { showTitle: true, dashboard: true })));
   }
 }
 
 function addViewMenu(ctx, anchor) {
   popover(anchor, (el, close) => {
     const name = h('input', { class: 'input', placeholder: 'View name' });
-    el.append(name, h('div', { class: 'db-type-grid' }, Object.entries(VIEW_TYPES).map(([type, [icon, label]]) => h('button', { class: 'db-menu-item', onclick: async () => {
-      const cfg = { filters: [], sorts: [], visible: [], filterMode: 'and' };
-      if (type === 'kanban') { const g = ctx.schema.properties.find(p => p.type === 'status') || ctx.schema.properties.find(p => p.type === 'select'); cfg.groupBy = g ? g.key : null; }
+    let source = ctx.page;
+    el.append(name,
+      h('label', { class: 'db-pop-title' }, 'Show bookmarks from'),
+      sourceSelect(ctx, source, v => { source = v; }),
+      h('div', { class: 'db-type-grid' }, Object.entries(VIEW_TYPES).map(([type, [icon, label]]) => h('button', { class: 'db-menu-item', onclick: async () => {
+      const cfg = { filters: [], sorts: [], visible: [], filterMode: 'and', source: source === ctx.page ? null : source };
+      const srcSchema = await loadSchema(source).catch(() => ({ properties: [] }));
+      if (type === 'kanban') { const g = srcSchema.properties.find(p => p.type === 'status') || srcSchema.properties.find(p => p.type === 'select'); cfg.groupBy = g ? 'p' + g.id : null; }
       try {
-        const v = await B().api('/views', { method: 'POST', body: { page: ctx.page, name: name.value.trim() || label, type, config: cfg } });
-        if (ctx.schema.views.length === 1 && ctx.schema.views[0].id == null) ctx.schema.views = [];
-        ctx.schema.views.push(v); ctx.activeId = v.id; B().store.set('view.' + ctx.page, v.id);
-        close(); ctx.draw();
+        const v = await B().api('/views', { method: 'POST', body: { page: ctx.page, name: name.value.trim() || (cfg.source ? `${label} · ${pageLabel(source).replace(/^\S+\s/, '')}` : label), type, config: cfg } });
+        if (ctx.views.length === 1 && ctx.views[0].id == null) ctx.views = [];
+        ctx.views.push(v); ctx.activeId = v.id; B().store.set('view.' + ctx.page, v.id);
+        close(); if (cfg.source) ctx.reload(); else ctx.draw();
         if (type === 'kanban' && !cfg.groupBy) B().toast('Board view needs a Select or Status property to group by — add one with ⚙ Properties');
       } catch (e) { B().toast(e.message); }
     } }, h('span', { class: 'db-ti' }, icon), label))));
@@ -985,6 +1020,12 @@ function viewMenu(ctx, view, anchor) {
   popover(anchor, (el, close) => {
     const name = h('input', { class: 'input', value: view.name, onkeydown: e => { if (e.key === 'Enter') close(); } });
     el.append(name,
+      h('label', { class: 'db-pop-title' }, 'Show bookmarks from'),
+      sourceSelect(ctx, sourceOf(ctx, view), async src => {
+        // filters, sorts and columns refer to the old source's properties, so start fresh
+        Object.assign(view.config, { source: src === ctx.page ? null : src, filters: [], sorts: [], visible: [], groupBy: null, widths: {} });
+        close(); try { await persistView(ctx, view); } catch (e) { B().toast(e.message); } ctx.root.reload();
+      }),
       h('div', { class: 'db-type-grid' }, Object.entries(VIEW_TYPES).map(([type, [icon, label]]) => h('button', { class: 'db-menu-item' + (view.type === type ? ' on' : ''),
         onclick: () => updateView(ctx, view, (c, v) => { v.type = type; if (type === 'kanban' && !c.groupBy) { const g = ctx.schema.properties.find(p => ['status', 'select'].includes(p.type)); c.groupBy = g?.key || null; } }) },
         h('span', { class: 'db-ti' }, icon), label))),
@@ -998,13 +1039,13 @@ function viewMenu(ctx, view, anchor) {
       menuItem('⧉ Duplicate view', async () => {
         close();
         const v = await B().api('/views', { method: 'POST', body: { page: ctx.page, name: view.name + ' copy', type: view.type, config: view.config } });
-        if (view.id == null) ctx.schema.views = [];
-        ctx.schema.views.push(v); ctx.activeId = v.id; ctx.draw();
+        if (view.id == null) ctx.views = [];
+        ctx.views.push(v); ctx.root.activeId = v.id; ctx.draw();
       }),
       view.id != null ? menuItem('🗑 Delete view', async () => {
         if (!confirm(`Delete the view “${view.name}”? Your bookmarks are not affected.`)) return;
-        close(); await B().api(`/views/${view.id}`, { method: 'DELETE' }); ctx.schema.views = ctx.schema.views.filter(v => v !== view);
-        if (!ctx.schema.views.length) await ctx.reload(); else { ctx.activeId = ctx.schema.views[0].id; ctx.draw(); }
+        close(); await B().api(`/views/${view.id}`, { method: 'DELETE' }); ctx.root.views = ctx.views.filter(v => v !== view);
+        if (!ctx.root.views.length) await ctx.reload(); else { ctx.root.activeId = ctx.root.views[0].id; ctx.draw(); }
       }, 'danger') : null);
     return () => { const n = name.value.trim(); if (n && n !== view.name) { view.name = n; persistView(ctx, view).then(() => ctx.draw()); } };
   }, { width: 300 });
@@ -1088,7 +1129,7 @@ function groupMenu(ctx, view, anchor) {
       ...options.map(p => menuItem(`${TYPES[p.type][0]}  ${p.name}`, () => { close(); updateView(ctx, view, cc => { cc.groupBy = p.key; }); }, c.groupBy === p.key ? 'on' : '')),
       options.length ? null : h('div', { class: 'muted db-hint' }, 'Add a Select, Status, Multi-select or Checkbox property to group by.'),
       h('label', { class: 'row db-menu-check' }, h('input', { type: 'checkbox', checked: c.hideEmptyGroups, onchange: e => updateView(ctx, view, cc => { cc.hideEmptyGroups = e.target.checked; }) }), ' Hide empty groups'),
-      h('hr'), menuItem('⚙ Add or edit properties…', () => { close(); openPropertiesEditor(ctx.page, () => ctx.reload()); }));
+      h('hr'), menuItem('⚙ Add or edit properties…', () => { close(); openPropertiesEditor((ctx.dataPage || ctx.page), () => ctx.reload()); }));
   }, { width: 280 });
 }
 
@@ -1106,12 +1147,19 @@ function visibleMenu(ctx, view, anchor) {
     sortable(list, { onMove: (from, to) => { order = moveItem(order, from, to); vis = order.map(p => p.key).filter(k => vis.includes(k)); draw(); commit(); } });
     draw();
     el.append(h('div', { class: 'db-pop-title' }, 'Shown in this view · drag ⋮⋮ to reorder'), list,
-      h('hr'), menuItem('+ New property', e => { close(); addPropertyMenu(anchor, ctx.page, p => { view.config.visible = [...vis, p.key]; persistView(ctx, view).then(() => ctx.reload()); }); }),
-      menuItem('⚙ Edit properties…', () => { close(); openPropertiesEditor(ctx.page, () => ctx.reload()); }));
+      h('hr'), menuItem('+ New property', e => { close(); addPropertyMenu(anchor, (ctx.dataPage || ctx.page), p => { view.config.visible = [...vis, p.key]; persistView(ctx, view).then(() => ctx.reload()); }); }),
+      menuItem('⚙ Edit properties…', () => { close(); openPropertiesEditor((ctx.dataPage || ctx.page), () => ctx.reload()); }));
   }, { width: 280 });
 }
 
+const pageHref = src => (src === 'home' ? '#/' : '#/c/' + src.slice(2));
 function viewBlock(ctx, view, { showTitle, dashboard }) {
+  const srcLink = ctx.linked ? h('a', { class: 'db-src-link', href: pageHref(ctx.dataPage), title: 'This view shows bookmarks from another page' }, '↗ ' + pageLabel(ctx.dataPage)) : null;
+  if (ctx.sourceError || !ctx.schema) {
+    return h('section', { class: 'db-view' }, h('div', { class: 'db-view-head' },
+      h('button', { class: 'db-view-title', onclick: e => viewMenu(ctx, view, e.currentTarget) }, h('span', { class: 'db-ti' }, VIEW_TYPES[view.type][0]), view.name), srcLink),
+      h('div', { class: 'empty' }, `⚠ This view shows ${pageLabel(ctx.dataPage)}, which can't be loaded${ctx.sourceError ? ` (${ctx.sourceError})` : ''}. Pick another source in the view menu.`));
+  }
   const items = applyView(ctx.items, view, ctx.schema);
   const limit = view.config.limit || (dashboard ? 12 : 0);
   const key = String(view.id);
@@ -1120,7 +1168,7 @@ function viewBlock(ctx, view, { showTitle, dashboard }) {
   const block = h('section', { class: 'db-view db-view-' + view.type },
     h('div', { class: 'db-view-head' },
       showTitle ? h('button', { class: 'db-view-title', onclick: e => viewMenu(ctx, view, e.currentTarget) }, h('span', { class: 'db-ti' }, VIEW_TYPES[view.type][0]), view.name, h('span', { class: 'muted' }, ' ' + items.length)) : h('span', { class: 'muted db-count' }, `${items.length} item${items.length === 1 ? '' : 's'}`),
-      h('span', { class: 'grow' }), viewToolbar(ctx, view)));
+      srcLink, h('span', { class: 'grow' }), viewToolbar(ctx, view)));
   const groupProp = view.config.groupBy && findProp(ctx.schema, view.config.groupBy);
   if (view.type === 'kanban') block.append(kanban(ctx, view, items, groupProp));
   else if (groupProp) {
@@ -1156,7 +1204,7 @@ function newItem(ctx, anchor, group, groupProp) {
       if (e.key !== 'Enter' || !inp.value.trim()) return;
       const v = inp.value.trim(); const isUrl = /^https?:\/\/\S+$/i.test(v);
       const body = isUrl ? { url: v } : { title: v, note: '' };
-      const cid = pageCollection(ctx.page); if (cid) body.collectionId = cid;
+      const cid = pageCollection(ctx.dataPage || ctx.page); if (cid) body.collectionId = cid;
       if (group && groupProp && group.id !== '__none') {
         const k = groupProp.key;
         if (k === 'favorite') body.favorite = group.id === 'true';
@@ -1188,7 +1236,7 @@ function table(ctx, view, items, group, groupProp) {
   const head = h('div', { class: 'db-tr db-th' }, [title, ...cols].map((p, i) => h('div', { class: 'db-td', style: { width: w(p) }, 'data-idx': i ? i - 1 : null },
     h('button', { class: 'db-th-btn', onclick: e => headerMenu(ctx, view, p, e.currentTarget) }, h('span', { class: 'db-ti' }, TYPES[p.type][0]), p.name),
     h('span', { class: 'db-resize', onmousedown: e => startResize(e, ctx, view, p) }))),
-    h('div', { class: 'db-td add' }, h('button', { class: 'db-th-btn', title: 'Add a property', onclick: e => addPropertyMenu(e.currentTarget, ctx.page, p => {
+    h('div', { class: 'db-td add' }, h('button', { class: 'db-th-btn', title: 'Add a property', onclick: e => addPropertyMenu(e.currentTarget, (ctx.dataPage || ctx.page), p => {
       view.config.visible = [...defaultVisible(view, ctx.schema), p.key]; persistView(ctx, view).then(() => ctx.reload()); }) }, '+')));
   sortable(head, { axis: 'x', handle: '.db-th-btn', onMove: (from, to) => updateView(ctx, view, c => { c.visible = moveItem(cols.map(p => p.key), from, to); }) });
   const rows = items.map(it => h('div', { class: 'db-tr' },
@@ -1224,7 +1272,7 @@ function headerMenu(ctx, view, prop, anchor) {
       opsFor(prop).length ? menuItem('⚲ Filter', () => { close(); updateView(ctx, view, c => { c.filters.push({ prop: prop.key, op: opsFor(prop)[0].op, value: null }); }); setTimeout(() => { const b = ctx.container.querySelector('.db-tool'); if (b) filterMenu(ctx, view, b); }, 50); }) : null,
       GROUPABLE.has(prop.type) ? menuItem('⊞ Group by this', () => { close(); updateView(ctx, view, c => { c.groupBy = prop.key; }); }) : null,
       prop.key !== 'title' ? menuItem('👁 Hide in this view', () => { close(); updateView(ctx, view, c => { c.visible = defaultVisible(view, ctx.schema).filter(k => k !== prop.key); if (!c.visible.length) c.visible = ['title']; }); }) : null,
-      !prop.builtin ? [h('hr'), menuItem('⚙ Edit property…', () => { close(); openPropertiesEditor(ctx.page, () => ctx.reload()); })] : null);
+      !prop.builtin ? [h('hr'), menuItem('⚙ Edit property…', () => { close(); openPropertiesEditor((ctx.dataPage || ctx.page), () => ctx.reload()); })] : null);
   }, { width: 240 });
 }
 
@@ -1295,7 +1343,7 @@ async function moveToGroup(ctx, item, prop, from, to) {
     v = cur.filter(x => String(x) !== from); if (to !== '__none' && !v.includes(+to)) v.push(+to);
   } else v = to === '__none' ? null : to;
   await saveValue(ctx, item, prop, v);
-  if (prop.key === 'collection' && pageCollection(ctx.page)) ctx.reload();
+  if (prop.key === 'collection' && pageCollection(ctx.dataPage || ctx.page)) ctx.reload();
 }
 
 window.BurrowDB = { render, openPropertiesEditor, drawerSection, invalidate: () => Object.keys(schemas).forEach(k => delete schemas[k]) };

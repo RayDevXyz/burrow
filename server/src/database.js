@@ -271,6 +271,8 @@ function cleanViewConfig(c = {}) {
     cardSize: ['small', 'medium', 'large'].includes(c.cardSize) ? c.cardSize : 'medium',
     showImages: c.showImages !== false,
     limit: Math.min(200, Math.max(0, int(c.limit) || 0)),
+    // Linked view: show the bookmarks of another page ('home' or 'c:<id>'); null = this page
+    source: typeof c.source === 'string' && /^(home|c:\d+)$/.test(c.source) ? c.source : null,
   };
 }
 
@@ -278,9 +280,11 @@ router.post('/views', (req, res) => {
   const { page, name, type, config } = req.body || {};
   if (!pageOk(req.userId, page)) return bad(res, 'Unknown page');
   if (!VIEW_TYPES.includes(type)) return bad(res, 'Unknown view type');
+  const cfg = cleanViewConfig(config);
+  if (cfg.source && (cfg.source === page || !pageOk(req.userId, cfg.source))) cfg.source = null;
   const pos = db.prepare('SELECT COALESCE(MAX(position), 0) + 1 p FROM views WHERE user_id = ? AND page = ?').get(req.userId, page).p;
   const r = db.prepare('INSERT INTO views (user_id, page, name, type, config, position) VALUES (?,?,?,?,?,?)')
-    .run(req.userId, page, str(name, 60).trim() || 'View', type, JSON.stringify(cleanViewConfig(config)), pos);
+    .run(req.userId, page, str(name, 60).trim() || 'View', type, JSON.stringify(cfg), pos);
   res.status(201).json(parseView(db.prepare('SELECT * FROM views WHERE id = ?').get(Number(r.lastInsertRowid))));
 });
 
@@ -290,6 +294,7 @@ router.patch('/views/:id', (req, res) => {
   const name = req.body?.name !== undefined ? (str(req.body.name, 60).trim() || v.name) : v.name;
   const type = VIEW_TYPES.includes(req.body?.type) ? req.body.type : v.type;
   const config = req.body?.config ? cleanViewConfig(req.body.config) : JSON.parse(v.config);
+  if (config.source && (config.source === v.page || !pageOk(req.userId, config.source))) config.source = null;
   db.prepare('UPDATE views SET name = ?, type = ?, config = ? WHERE id = ?').run(name, type, JSON.stringify(config), v.id);
   res.json(parseView(db.prepare('SELECT * FROM views WHERE id = ?').get(v.id)));
 });

@@ -406,6 +406,8 @@ api.patch('/collections/:id', (req, res) => {
 api.delete('/collections/:id', (req, res) => {
   db.prepare('DELETE FROM views WHERE user_id = ? AND page = ?').run(req.userId, 'c:' + int(req.params.id));
   db.prepare('DELETE FROM page_settings WHERE user_id = ? AND page = ?').run(req.userId, 'c:' + int(req.params.id));
+  // Linked views that showed this collection fall back to their own page
+  db.prepare(`UPDATE views SET config = json_set(config, '$.source', NULL) WHERE user_id = ? AND json_extract(config, '$.source') = ?`).run(req.userId, 'c:' + int(req.params.id));
   db.prepare('DELETE FROM collections WHERE id = ? AND user_id = ?').run(int(req.params.id), req.userId);
   res.json({ ok: true });
 });

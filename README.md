@@ -29,6 +29,10 @@ burrow/
 - **Databases like Notion**: Home and every collection work like a Notion database.
   - **Views**: Table, Board (kanban), List and Gallery. Each view has its own filters (and/or), sorts, grouping and visible properties. Add views with **+ Add view** under the page header.
   - **Dashboard**: switch a page from *Tabs* to *Dashboard* to show all its views stacked, each filtered its own way.
+  - **Linked views**: a view can show bookmarks from another page. In **+ Add view**, choose *Show bookmarks from* (Home or any collection), or change it later in the view menu.
+    - Example: put a Projects board and an Areas table on Home as a dashboard.
+    - Filters, grouping and properties come from the source collection, and **+ New** adds items there.
+    - A ↗ label links to the source. If the source collection is deleted, the view switches back to its own page.
   - **Properties** (page header → **⚙ Properties**): properties made on Home apply to every bookmark; collections can add extra ones. Types: Text (with **bold**/*italic*/`code`/links), Number (plain, commas, percent, currency or progress bar), Select, Status (To-do / In progress / Complete), Multi-select, Date (ranges, optional time), Formula, Relation, Files & media, Checkbox, URL, Created time, Button (runs actions like "set Status to Done") and ID (with a prefix).
   - Edit values in table cells, by dragging board cards between columns, or in the item panel. Group and filter by any property.
   - **Relations between pages**: give Projects an **Area** relation that links to pages in an *Areas* collection.
